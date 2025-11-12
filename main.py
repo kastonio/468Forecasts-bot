@@ -3,7 +3,6 @@ import os
 import json
 import io
 from datetime import datetime, timedelta
-import pytz
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -14,6 +13,8 @@ from telegram.ext import (
 )
 import logging
 from statistics import mean
+from timezonefinder import TimezoneFinder
+import pytz
 
 # --- Logging ---
 logging.basicConfig(
@@ -29,7 +30,6 @@ if not TELEGRAM_TOKEN:
 USER_AGENT = "468ForecastsBot/1.0 (contact@example.com)"
 YRNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
 DATA_FILE = "data.json"
-TIMEZONE = pytz.timezone("Europe/Moscow")
 
 # Ensure data file exists
 if not os.path.exists(DATA_FILE):
@@ -152,12 +152,11 @@ def deg_to_compass(deg):
     ix = int((deg + 11.25) / 22.5) % 16
     return dirs[ix]
 
-def parse_yr(json_data):
-    tz = TIMEZONE
+def parse_yr(json_data, tz):
     props = json_data.get("properties", {})
     timeseries = props.get("timeseries", [])
     now = datetime.now(tz)
-    target_dates = [(now + timedelta(days=i)).date() for i in range(8)]  # 8 дней
+    target_dates = [(now + timedelta(days=i)).date() for i in range(8)]
     candidates = {d: [] for d in target_dates}
 
     for item in timeseries:
@@ -179,8 +178,9 @@ def parse_yr(json_data):
         wind_dir = instant.get("wind_from_direction")
 
         precip = 0.0
-        if "next_1_hours" in data and data["next_1_hours"].get("details"):
-            precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
+        for k in ["next_1_hours","next_6_hours","next_12_hours"]:
+            if k in data and data[k].get("details"):
+                precip += data[k]["details"].get("precipitation_amount", 0.0)
 
         candidates[date].append({
             "temp": temp,
@@ -204,7 +204,7 @@ def parse_yr(json_data):
             "temp_max": round(max(temps)) if temps else None,
             "wind_speed": round(mean(wind_speeds),1) if wind_speeds else None,
             "wind_dir_deg": wind_dir_rep,
-            "precip_mm": round(total_precip, 1)
+            "precip_mm": round(total_precip,1)
         }
     return results
 
@@ -217,12 +217,17 @@ def build_image():
     lon = d["coords"]["lon"]
     location_name = d.get("location_name") or "unknown"
 
+    # --- Определяем локальную таймзону ---
+    tf = TimezoneFinder()
+    tz_name = tf.timezone_at(lat=lat, lng=lon) or "UTC"
+    tz = pytz.timezone(tz_name)
+
     try:
         yr_raw = requests.get(
             YRNO_URL, params={"lat": lat, "lon": lon},
             headers={"User-Agent": USER_AGENT}, timeout=15
         ).json()
-        yr = parse_yr(yr_raw)
+        yr = parse_yr(yr_raw, tz)
     except Exception as e:
         logger.exception("Ошибка получения данных от Yr:")
         return None
@@ -250,7 +255,7 @@ def build_image():
         draw.text((cx - w/2, y_start), h, font=font_header, fill=(0,0,0))
 
     y = y_start + int(1.2 * row_h)
-    today = datetime.now(TIMEZONE).date()
+    today = datetime.now(tz).date()
 
     def text_size(txt, f):
         b = draw.textbbox((0,0), txt, font=f)
@@ -280,15 +285,19 @@ def build_image():
         rain = info.get("precip_mm", 0.0)
         snow = round(rain * 1.5, 1) if (tmax is not None and tmax <= 0) else 0.0
 
-        cells = [label, t_text, wind_txt, f"{rain:.1f}", f"{snow:.1f}"]
+        # --- Заменяем 0.0 осадков на черный прочерк ---
+        rain_txt = f"{rain:.1f}" if rain != 0 else "-"
+        snow_txt = f"{snow:.1f}" if snow != 0 else "-"
+
+        cells = [label, t_text, wind_txt, rain_txt, snow_txt]
 
         draw.line((12, y - row_h/2, width - 12, y - row_h/2), fill=(160,160,160), width=1)
 
         for i, (cx, txt) in enumerate(zip(col_centers, cells)):
             fill_color = (0,0,0)
-            if i == 3:  # rain
+            if i == 3 and txt != "-":  # rain
                 fill_color = (200, 0, 0)
-            elif i == 4:  # snow
+            elif i == 4 and txt != "-":  # snow
                 fill_color = (0, 0, 200)
 
             if txt == t_text and tmax is not None and tmin is not None:
@@ -362,7 +371,14 @@ async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_photo(photo=bio, caption=f"468 Forecasts — {d.get('location_name','')}")
 
 def schedule_jobs():
-    scheduler = BackgroundScheduler(timezone=TIMEZONE)
+    d = load_data()
+    if not d.get("coords"):
+        tz = pytz.timezone("Europe/Moscow")
+    else:
+        tf = TimezoneFinder()
+        tz_name = tf.timezone_at(lat=d["coords"]["lat"], lng=d["coords"]["lon"]) or "UTC"
+        tz = pytz.timezone(tz_name)
+    scheduler = BackgroundScheduler(timezone=tz)
     for hour in [0,6,12,18]:
         scheduler.add_job(send_forecast, 'cron', hour=hour, minute=0)
     scheduler.start()
