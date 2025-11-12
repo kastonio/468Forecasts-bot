@@ -12,7 +12,7 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters
 )
 import logging
-from collections import Counter
+from statistics import mean
 
 # --- Logging ---
 logging.basicConfig(
@@ -21,19 +21,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
+# --- Config ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-USER_AGENT = "468ForecastsBot/1.0 (contact@example.com)"
+USER_AGENT = "468ForecastsBot/1.0"
 YRNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
 DATA_FILE = "data.json"
 TIMEZONE = pytz.timezone("Europe/Moscow")
 
-# --- Ensure data file exists ---
+# --- Ensure data file ---
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump({"admin_id": None, "chat_id": None, "coords": None, "location_name": None, "enabled": True}, f)
 
-# --- Utility functions ---
+# --- Data I/O ---
 def load_data():
     with open(DATA_FILE, "r") as f:
         return json.load(f)
@@ -46,15 +46,13 @@ def is_admin(user_id):
     d = load_data()
     return d.get("admin_id") == user_id
 
-# --- Bot commands ---
+# --- Commands ---
 async def set_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = load_data()
     d["admin_id"] = update.effective_user.id
     d["chat_id"] = update.effective_chat.id
     save_data(d)
-    await update.message.reply_text(
-        "Вы назначены админом. Теперь задайте координаты через /setcoords <lat> <lon>"
-    )
+    await update.message.reply_text("Вы назначены админом. Теперь задайте координаты через /setcoords <lat> <lon>")
 
 COORDS, NAME = range(2)
 
@@ -74,9 +72,7 @@ async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Координаты должны быть числами. Пример: /setcoords 55.75 37.62")
         return ConversationHandler.END
     context.user_data["coords"] = {"lat": lat, "lon": lon}
-    await update.message.reply_text(
-        "Введите название места (это будет отображаться в карточке прогноза):"
-    )
+    await update.message.reply_text("Введите название места (это будет отображаться в карточке прогноза):")
     return NAME
 
 async def save_location_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,7 +93,7 @@ async def stop_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = load_data()
     d["enabled"] = False
     save_data(d)
-    await update.message.reply_text("Рассылка остановлена. Чтобы включить снова — /startforecast")
+    await update.message.reply_text("Рассылка остановлена.")
 
 async def start_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -106,20 +102,20 @@ async def start_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = load_data()
     d["enabled"] = True
     save_data(d)
-    await update.message.reply_text("Рассылка включена. Бот будет слать прогнозы по расписанию.")
+    await update.message.reply_text("Рассылка включена.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (
         "/setadmin - назначить себя админом\n"
-        "/setcoords <lat> <lon> - задать координаты (после ввода бот попросит название места)\n"
+        "/setcoords <lat> <lon> - задать координаты\n"
         "/forecast - получить прогноз сейчас\n"
-        "/stopforecast - остановить автоматическую рассылку\n"
-        "/startforecast - включить автоматическую рассылку\n"
-        "/help - показать эту справку\n"
+        "/stopforecast - остановить рассылку\n"
+        "/startforecast - включить рассылку\n"
+        "/help - помощь\n"
     )
     await update.message.reply_text(txt)
 
-# --- Forecast utilities ---
+# --- Parsing YR.no ---
 def deg_to_compass(deg):
     if deg is None:
         return "?"
@@ -151,10 +147,10 @@ def parse_yr_web(json_data):
         wind_speed = instant.get("wind_speed")
         wind_dir_deg = instant.get("wind_from_direction")
 
-        # Берем только next_1_hours, иначе завышается
         precip = 0.0
-        if "next_1_hours" in data and data["next_1_hours"].get("details"):
-            precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
+        for key in ["next_1_hours", "next_6_hours"]:
+            if key in data and data[key].get("details"):
+                precip += data[key]["details"].get("precipitation_amount", 0.0)
 
         candidates[date].append({
             "temp": temp,
@@ -171,26 +167,21 @@ def parse_yr_web(json_data):
         wind_dirs = [x["wind_dir_deg"] for x in lst if x["wind_dir_deg"] is not None]
         total_precip = sum(x["precip_mm"] for x in lst)
 
-        wind_dir = None
-        if wind_dirs:
-            wind_dir = Counter(wind_dirs).most_common(1)[0][0]
-
         results[str(d)] = {
             "temp_min": round(min(temps)) if temps else None,
             "temp_max": round(max(temps)) if temps else None,
-            "wind_speed": round(sum(wind_speeds)/len(wind_speeds)) if wind_speeds else None,
-            "wind_dir_deg": wind_dir,
-            "precip_mm": round(total_precip)
+            "wind_speed": round(mean(wind_speeds),1) if wind_speeds else None,
+            "wind_dir_deg": wind_dirs[len(wind_dirs)//2] if wind_dirs else None,
+            "precip_mm": round(total_precip,1)
         }
     return results
 
-# --- Build forecast image ---
+# --- Build Image ---
 def build_image():
     d = load_data()
     if not d.get("coords"):
         return None
-    lat = d["coords"]["lat"]
-    lon = d["coords"]["lon"]
+    lat, lon = d["coords"]["lat"], d["coords"]["lon"]
     location_name = d.get("location_name") or "unknown"
 
     try:
@@ -203,56 +194,55 @@ def build_image():
         logger.error(f"Ошибка при получении прогноза: {e}")
         return None
 
-    left_margin = 12
-    top_margin = 50
-    width = 700
-    height = 280
-    row_height = 35
-    img = Image.new("RGB", (width, height), "#E0F7FF")
+    scale = 1.5
+    width, height = int(800 * scale), int(400 * scale)
+    img = Image.new("RGB", (width, height), (220, 235, 255))
     draw = ImageDraw.Draw(img)
+
     try:
-        font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 16)
-        font = ImageFont.truetype("DejaVuSans.ttf", 13)
+        font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", int(18 * scale))
+        font = ImageFont.truetype("DejaVuSans.ttf", int(14 * scale))
     except Exception:
         font_b = ImageFont.load_default()
         font = ImageFont.load_default()
 
-    draw.text((left_margin, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
+    draw.text((20 * scale, 10 * scale), f"468 Forecasts: {location_name}", font=font_b, fill=(0,0,0))
 
-    y_offset = top_margin
-    headers = ["Date", "Temp (Max/Min °C)", "Wind (m/s)", "Precip (mm)"]
-    x_positions = [left_margin, 160, 340, 500]
-    col_widths = [150, 160, 160, 160]
-    prev_y = y_offset
+    headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
+    x_positions = [20*scale, 180*scale, 350*scale, 520*scale, 670*scale]
+    y_start = 60 * scale
+    line_height = 40 * scale
 
-    # Заголовки
-    for i, h in enumerate(headers):
-        x = x_positions[i]
-        draw.text((x + col_widths[i]//2, y_offset), h, font=font_b, fill=(0,0,0), anchor="mm")
-    y_offset += row_height
+    for x, h in zip(x_positions, headers):
+        draw.text((x, y_start), h, font=font_b, fill=(0,0,0))
+    y_offset = y_start + line_height
 
-    today_date = datetime.now(TIMEZONE).date()
+    today = datetime.now(TIMEZONE).date()
 
     for day in sorted(yr.keys()):
         info = yr[day]
-        dt = datetime.fromisoformat(day)
-        date_str = "Today" if dt.date() == today_date else dt.strftime("%a %d %b")
-        temp = f"{info['temp_max']}/{info['temp_min']}" if info['temp_min'] is not None else "?"
-        wind_dir = deg_to_compass(info["wind_dir_deg"])
-        wind_speed = f"{info['wind_speed']}" if info["wind_speed"] is not None else "?"
-        wind = f"{wind_dir} {wind_speed}"
-        precip = info["precip_mm"]
-        row = [date_str, temp, wind, f"{precip}"]
+        date_obj = datetime.fromisoformat(day)
+        day_label = "Today" if date_obj.date() == today else date_obj.strftime("%a %d %b")
 
-        # линия по центру между рядами
-        line_y = prev_y + row_height // 2
-        draw.line((left_margin, line_y, width-left_margin, line_y), fill="gray", width=1)
-        prev_y = y_offset
+        temp_txt = f"{info['temp_max']}/{info['temp_min']}"
+        color = (200,0,0) if info['temp_max'] > 0 else (0,0,200)
+        wind_txt = f"{deg_to_compass(info['wind_dir_deg'])} {info['wind_speed']}"
+        rain = info['precip_mm']
+        snow = round(rain * 1.5) if info['temp_max'] <= 0 else 0
 
-        for i, val in enumerate(row):
-            x = x_positions[i]
-            draw.text((x + col_widths[i]//2, y_offset), str(val), font=font, fill=(0,0,0), anchor="mm")
-        y_offset += row_height
+        row = [day_label, temp_txt, wind_txt, f"{rain:.1f}", f"{snow:.1f}"]
+
+        # Текст
+        for x, val in zip(x_positions, row):
+            fill_color = color if val == temp_txt else (0,0,0)
+            w, h = draw.textsize(val, font=font)
+            draw.text((x + 50*scale - w/2, y_offset), val, font=font, fill=fill_color)
+
+        # Линия между строками
+        draw.line([(x_positions[0], y_offset + line_height/2),
+                   (x_positions[-1] + 150*scale, y_offset + line_height/2)],
+                  fill=(150,150,150), width=1)
+        y_offset += line_height
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
@@ -269,7 +259,7 @@ def send_forecast():
         return
     bot = Bot(token=TELEGRAM_TOKEN)
     try:
-        bot.send_photo(chat_id=d["chat_id"], photo=bio, caption=f"Прогноз на 5 дней ({d.get('location_name','')})")
+        bot.send_photo(chat_id=d["chat_id"], photo=bio, caption=f"468 Forecasts — {d.get('location_name','')}")
     except Exception as e:
         logger.error(f"Ошибка при отправке прогноза: {e}")
 
@@ -282,7 +272,7 @@ async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bio is None:
         await update.message.reply_text("Ошибка при получении прогноза.")
         return
-    await update.message.reply_photo(photo=bio, caption=f"Прогноз на 5 дней ({d.get('location_name','')})")
+    await update.message.reply_photo(photo=bio, caption=f"468 Forecasts — {d.get('location_name','')}")
 
 # --- Scheduler ---
 def schedule_jobs():
