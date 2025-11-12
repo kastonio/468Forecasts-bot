@@ -157,7 +157,7 @@ def parse_yr(json_data):
     props = json_data.get("properties", {})
     timeseries = props.get("timeseries", [])
     now = datetime.now(tz)
-    target_dates = [(now + timedelta(days=i)).date() for i in range(5)]
+    target_dates = [(now + timedelta(days=i)).date() for i in range(8)]  # 8 дней
     candidates = {d: [] for d in target_dates}
 
     for item in timeseries:
@@ -228,12 +228,11 @@ def build_image():
         return None
 
     # --- размеры изображения ---
-    row_h = 36        # высота строки
-    y_start = 44      # отступ сверху под заголовок
-    num_days = 8      # теперь 8 дней
-    height = y_start + int(row_h * 1.1 * num_days) + 30  # +30 для подписи снизу
+    row_h = 36
+    y_start = 44
+    num_days = 8
+    height = y_start + int(row_h * 1.1 * num_days) + 30
     width = 700
-
     img = Image.new("RGB", (width, height), (220, 235, 255))
     draw = ImageDraw.Draw(img)
 
@@ -241,7 +240,7 @@ def build_image():
     font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
     font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
-    draw.text((10, 6), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
+    draw.text((11, 7), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
 
     headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
     col_centers = [80, 240, 400, 540, 650]
@@ -257,7 +256,6 @@ def build_image():
         b = draw.textbbox((0,0), txt, font=f)
         return b[2]-b[0], b[3]-b[1]
 
-    # --- ограничиваем 8 дней ---
     sorted_days = sorted(yr.keys())[:8]
 
     for day_str in sorted_days:
@@ -307,7 +305,7 @@ def build_image():
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
 
-            elif i == 2:  # wind column → цифры по правому краю
+            elif i == 2:  # wind
                 parts = txt.split()
                 if len(parts) == 2:
                     dir_txt, speed_txt = parts
@@ -338,6 +336,7 @@ def build_image():
     bio.seek(0)
     return bio
 
+# --- Send forecast ---
 def send_forecast():
     d = load_data()
     if not d.get("coords") or not d.get("chat_id") or not d.get("enabled", True):
