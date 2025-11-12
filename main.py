@@ -240,6 +240,7 @@ def build_image():
     width, height = 1000, 420
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
+
     try:
         font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
         font = ImageFont.truetype("DejaVuSans.ttf", 14)
@@ -251,51 +252,48 @@ def build_image():
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
-    # Заголовки таблицы
-    headers = ["Дата", "Tемп, C", "Ветер, м/с", "Осадки в мм воды", "Снег Windy", "Снег Yr.no"]
-    x_positions = [12, 180, 300, 450, 650, 780]
-    y_start = 40
-    y_step = 50
-    for x, h in zip(x_positions, headers):
-        draw.text((x, y_start), h, font=font_b, fill=(0,0,0))
+    # заголовки
+    headers = ["Date", "Temp, C", "Wind, m/s", "Precip, mm", "New snow Windy", "Snow Yr.no"]
+    x_positions = [12, 150, 300, 480, 650, 820]
+    y_start = 50
+    y_step = 60
 
-    # Заполнение таблицы
-    for i, day in enumerate(sorted(yr.keys())):
-        y = y_start + y_step * (i+1)
+    for i, header in enumerate(headers):
+        draw.text((x_positions[i], y_start), header, font=font_b, fill=(0,0,0))
 
-        # Дата
-        dt = datetime.fromisoformat(day)
-        day_str = dt.strftime("%a %d %B")  # пример: пн 10 ноября
-        day_str = day_str[:2] + " " + dt.strftime("%d %B")
-        draw.text((x_positions[0], y), day_str, font=font, fill=(0,0,0))
+    for i, date_str in enumerate(sorted(yr.keys())):
+        y = y_start + y_step * (i + 1)
+        yr_data = yr[date_str]
+        windy_data = windy.get(date_str, {})
 
-        # Температура
-        temp = yr[day].get("temp")
-        if temp is not None:
-            t_str = f"{temp:.1f}"  # только одно значение, можно переделать если нужны high/low
-        else:
-            t_str = "-"
-        draw.text((x_positions[1], y), t_str, font=font, fill=(0,0,0))
+        # Дата: день недели, число, месяц
+        dt = yr_data["time"]
+        date_fmt = dt.strftime("%a %d %B")  # Mon 11 November
+        draw.text((x_positions[0], y), date_fmt, font=font, fill=(0,0,0))
 
-        # Ветер
-        wind_deg = yr[day].get("wind_dir_deg")
-        wind_speed = yr[day].get("wind_speed")
-        wind_str = f"{deg_to_compass(wind_deg)} {wind_speed:.1f}" if wind_deg is not None and wind_speed is not None else "-"
-        draw.text((x_positions[2], y), wind_str, font=font, fill=(0,0,0))
+        # Температуры High/Low
+        temp_high = yr_data.get("temp", "?")
+        temp_low = temp_high  # если у тебя нет низкой, можно дублировать или добавить расчет
+        draw.text((x_positions[1], y), f"{temp_high}/{temp_low}", font=font, fill=(0,0,0))
 
-        # Осадки
-        precip = yr[day].get("precip_mm") or 0.0
-        draw.text((x_positions[3], y), f"{precip:.1f}", font=font, fill=(0,0,0))
+        # Ветер: направление + скорость
+        wind_dir = deg_to_compass(windy_data.get("wind_dir_deg") or yr_data.get("wind_dir_deg"))
+        wind_speed = windy_data.get("wind_speed") or yr_data.get("wind_speed") or 0
+        draw.text((x_positions[2], y), f"{wind_dir} {wind_speed}", font=font, fill=(0,0,0))
+
+        # Осадки мм (YR)
+        precip = yr_data.get("precip_mm") or 0
+        draw.text((x_positions[3], y), f"{precip}", font=font, fill=(0,0,0))
 
         # Снег Windy
-        snow_windy = windy[day].get("new_snow_cm") or 0.0
-        if snow_windy < 0 and temp > 0:
-            snow_windy = 0
-        draw.text((x_positions[4], y), f"{snow_windy:.1f}", font=font, fill=(0,0,0))
+        new_snow = windy_data.get("new_snow_cm") or 0
+        if new_snow < 0:
+            new_snow = 0
+        draw.text((x_positions[4], y), f"{new_snow}", font=font, fill=(0,0,0))
 
-        # Снег Yr.no
-        snow_yr = precip * 1.5 if temp <= 0 else 0
-        draw.text((x_positions[5], y), f"{snow_yr:.1f}", font=font, fill=(0,0,0))
+        # Снег Yr.no = осадки * 1.5
+        snow_yr = max(0, precip * 1.5 if temp_high <= 0 else 0)
+        draw.text((x_positions[5], y), f"{snow_yr}", font=font, fill=(0,0,0))
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
