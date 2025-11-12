@@ -28,7 +28,6 @@ YRNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
 DATA_FILE = "data.json"
 TIMEZONE = pytz.timezone("Europe/Moscow")
 
-# --- Ensure data file ---
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump({"admin_id": None, "chat_id": None, "coords": None, "location_name": None, "enabled": True}, f)
@@ -57,8 +56,7 @@ async def set_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 COORDS, NAME = range(2)
 
 async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может задать координаты.")
         return ConversationHandler.END
     args = context.args
@@ -219,6 +217,10 @@ def build_image():
 
     today = datetime.now(TIMEZONE).date()
 
+    def text_size(draw, text, font):
+        bbox = draw.textbbox((0,0), text, font=font)
+        return bbox[2]-bbox[0], bbox[3]-bbox[1]
+
     for day in sorted(yr.keys()):
         info = yr[day]
         date_obj = datetime.fromisoformat(day)
@@ -232,13 +234,12 @@ def build_image():
 
         row = [day_label, temp_txt, wind_txt, f"{rain:.1f}", f"{snow:.1f}"]
 
-        # Текст
         for x, val in zip(x_positions, row):
             fill_color = color if val == temp_txt else (0,0,0)
-            w, h = draw.textsize(val, font=font)
+            w, h = text_size(draw, val, font)
             draw.text((x + 50*scale - w/2, y_offset), val, font=font, fill=fill_color)
 
-        # Линия между строками
+        # линия по центру между строками
         draw.line([(x_positions[0], y_offset + line_height/2),
                    (x_positions[-1] + 150*scale, y_offset + line_height/2)],
                   fill=(150,150,150), width=1)
@@ -274,7 +275,6 @@ async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_photo(photo=bio, caption=f"468 Forecasts — {d.get('location_name','')}")
 
-# --- Scheduler ---
 def schedule_jobs():
     scheduler = BackgroundScheduler(timezone=TIMEZONE)
     for hour in [0,6,12,18]:
@@ -282,7 +282,6 @@ def schedule_jobs():
     scheduler.start()
     return scheduler
 
-# --- Main ---
 def main():
     if not TELEGRAM_TOKEN:
         logger.error("TELEGRAM_TOKEN not set. Exiting.")
