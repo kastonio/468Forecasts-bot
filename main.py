@@ -247,7 +247,6 @@ def build_image():
         font_mono = ImageFont.load_default()
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
-    # Здесь можно вставить твой код для мини-таблицы с прогнозами (как в старой версии)
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
