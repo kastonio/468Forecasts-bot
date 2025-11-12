@@ -208,8 +208,6 @@ def parse_windy(json_data):
     return results
 
 # --- Build forecast image ---
-import locale
-locale.setlocale(locale.LC_TIME, "ru_RU.UTF-8")  # чтобы месяц и день недели на русском
 
 def build_image():
     d = load_data()
