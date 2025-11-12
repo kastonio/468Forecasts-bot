@@ -234,7 +234,7 @@ def build_image():
         yr = parse_yr(yr_raw)
         windy = parse_windy(windy_raw)
     except Exception as e:
-        logger.error(f"Ошибка при получении прогноза: {e}")
+        logger.error(f"Error fetching forecast: {e}")
         return None
 
     width, height = 1000, 420
@@ -252,7 +252,7 @@ def build_image():
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
-    # заголовки
+    # headers
     headers = ["Date", "Temp, C", "Wind, m/s", "Precip, mm", "New snow Windy", "Snow Yr.no"]
     x_positions = [12, 150, 300, 480, 650, 820]
     y_start = 50
@@ -266,32 +266,26 @@ def build_image():
         yr_data = yr[date_str]
         windy_data = windy.get(date_str, {})
 
-        # Дата: день недели, число, месяц
         dt = yr_data["time"]
-        date_fmt = dt.strftime("%a %d %B")  # Mon 11 November
+        date_fmt = dt.strftime("%a %d %B")  # e.g., Mon 12 November
         draw.text((x_positions[0], y), date_fmt, font=font, fill=(0,0,0))
 
-        # Температуры High/Low
         temp_high = yr_data.get("temp", "?")
-        temp_low = temp_high  # если у тебя нет низкой, можно дублировать или добавить расчет
+        temp_low = temp_high
         draw.text((x_positions[1], y), f"{temp_high}/{temp_low}", font=font, fill=(0,0,0))
 
-        # Ветер: направление + скорость
         wind_dir = deg_to_compass(windy_data.get("wind_dir_deg") or yr_data.get("wind_dir_deg"))
         wind_speed = windy_data.get("wind_speed") or yr_data.get("wind_speed") or 0
         draw.text((x_positions[2], y), f"{wind_dir} {wind_speed}", font=font, fill=(0,0,0))
 
-        # Осадки мм (YR)
         precip = yr_data.get("precip_mm") or 0
         draw.text((x_positions[3], y), f"{precip}", font=font, fill=(0,0,0))
 
-        # Снег Windy
         new_snow = windy_data.get("new_snow_cm") or 0
         if new_snow < 0:
             new_snow = 0
         draw.text((x_positions[4], y), f"{new_snow}", font=font, fill=(0,0,0))
 
-        # Снег Yr.no = осадки * 1.5
         snow_yr = max(0, precip * 1.5 if temp_high <= 0 else 0)
         draw.text((x_positions[5], y), f"{snow_yr}", font=font, fill=(0,0,0))
 
