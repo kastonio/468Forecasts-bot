@@ -31,10 +31,10 @@ YRNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
 DATA_FILE = "data.json"
 TIMEZONE = pytz.timezone("Europe/Moscow")
 
-# Ensure data file exists
+# --- Ensure data file exists ---
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump({"admin_id": None, "chats": {}}, f)
+        json.dump({"admin_id": None, "chats": {}}, f, ensure_ascii=False, indent=2)
 
 # --- Data helpers ---
 def load_data():
@@ -48,6 +48,17 @@ def save_data(d):
 def is_admin(user_id):
     d = load_data()
     return d.get("admin_id") == user_id
+
+def get_chat_data(chat_id):
+    d = load_data()
+    return d.get("chats", {}).get(str(chat_id), {})
+
+def save_chat_data(chat_id, chat_data):
+    d = load_data()
+    if "chats" not in d:
+        d["chats"] = {}
+    d["chats"][str(chat_id)] = chat_data
+    save_data(d)
 
 # --- Bot commands ---
 async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,83 +93,66 @@ async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(d)
     await update.message.reply_text(f"Назначен админ: {new_admin_id}")
 
-# --- Set coords conversation ---
-LAT, LON, NAME = range(3)
+COORDS, NAME = range(2)
 
 async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может задать координаты.")
         return ConversationHandler.END
-    await update.message.reply_text("Введите широту (например, 55.75):")
-    return LAT
-
-async def set_lat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) != 2:
+        await update.message.reply_text("Использование: /setcoords <lat> <lon>")
+        return ConversationHandler.END
     try:
-        lat = float(update.message.text.strip())
+        lat = float(args[0])
+        lon = float(args[1])
     except ValueError:
-        await update.message.reply_text("Широта должна быть числом. Попробуйте снова:")
-        return LAT
-    context.user_data["lat"] = lat
-    await update.message.reply_text("Введите долготу (например, 37.62):")
-    return LON
-
-async def set_lon(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        lon = float(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("Долгота должна быть числом. Попробуйте снова:")
-        return LON
-    context.user_data["lon"] = lon
-    await update.message.reply_text("Введите название места для прогноза:")
+        await update.message.reply_text("Координаты должны быть числами. Пример: /setcoords 55.75 37.62")
+        return ConversationHandler.END
+    context.user_data["coords"] = {"lat": lat, "lon": lon}
+    await update.message.reply_text("Введите название места (это будет отображаться в карточке прогноза):")
     return NAME
 
 async def save_location_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
+    coords = context.user_data.get("coords")
+    if not coords:
+        await update.message.reply_text("Координаты не найдены. Начните с /setcoords")
+        return ConversationHandler.END
     chat_id = update.effective_chat.id
-    lat = context.user_data.get("lat")
-    lon = context.user_data.get("lon")
-    d = load_data()
-    if "chats" not in d:
-        d["chats"] = {}
-    d["chats"][str(chat_id)] = {
-        "coords": {"lat": lat, "lon": lon},
+    chat_data = {
+        "coords": coords,
         "location_name": name,
         "enabled": True
     }
-    save_data(d)
-    await update.message.reply_text(f"Сохранено для этого чата: {lat}, {lon} ({name})")
+    save_chat_data(chat_id, chat_data)
+    await update.message.reply_text(f"Сохранено для этого чата: {coords['lat']}, {coords['lon']} ({name})")
     return ConversationHandler.END
 
 async def stop_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может управлять рассылкой.")
         return
-    chat_id = str(update.effective_chat.id)
-    d = load_data()
-    if "chats" in d and chat_id in d["chats"]:
-        d["chats"][chat_id]["enabled"] = False
-        save_data(d)
-        await update.message.reply_text("Рассылка остановлена для этого чата.")
-    else:
-        await update.message.reply_text("Для этого чата настройки не найдены.")
+    chat_id = update.effective_chat.id
+    chat_data = get_chat_data(chat_id)
+    chat_data["enabled"] = False
+    save_chat_data(chat_id, chat_data)
+    await update.message.reply_text("Рассылка остановлена для этого чата.")
 
 async def start_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может управлять рассылкой.")
         return
-    chat_id = str(update.effective_chat.id)
-    d = load_data()
-    if "chats" in d and chat_id in d["chats"]:
-        d["chats"][chat_id]["enabled"] = True
-        save_data(d)
-        await update.message.reply_text("Рассылка включена для этого чата.")
-    else:
-        await update.message.reply_text("Для этого чата настройки не найдены.")
+    chat_id = update.effective_chat.id
+    chat_data = get_chat_data(chat_id)
+    chat_data["enabled"] = True
+    save_chat_data(chat_id, chat_data)
+    await update.message.reply_text("Рассылка включена для этого чата.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (
         "/setadmin [@username|id] - назначить админа\n"
-        "/setcoords - задать координаты интерактивно (только админ)\n"
+        "/setcoords <lat> <lon> - задать координаты (только админ)\n"
         "/forecast - получить прогноз сейчас (доступно всем)\n"
         "/stopforecast - остановить рассылку (только админ)\n"
         "/startforecast - включить рассылку (только админ)\n"
@@ -166,7 +160,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(txt)
 
-# --- Forecast parsing (без изменений) ---
+# --- Forecast parsing ---
 def deg_to_compass(deg):
     if deg is None:
         return "?"
@@ -230,11 +224,9 @@ def parse_yr(json_data):
         }
     return results
 
-# --- Build image (без изменений кроме получения данных по чату) ---
-def build_image(chat_id):
-    d = load_data()
-    chat_data = d.get("chats", {}).get(str(chat_id))
-    if not chat_data or not chat_data.get("coords"):
+# --- Build image ---
+def build_image(chat_data):
+    if not chat_data.get("coords"):
         return None
     lat = chat_data["coords"]["lat"]
     lon = chat_data["coords"]["lon"]
@@ -250,7 +242,6 @@ def build_image(chat_id):
         logger.exception("Ошибка получения данных от Yr:")
         return None
 
-    # --- image build code ---
     width, height = 700, 300
     img = Image.new("RGB", (width, height), (220, 235, 255))
     draw = ImageDraw.Draw(img)
@@ -307,9 +298,9 @@ def build_image(chat_id):
 
         for i, (cx, txt) in enumerate(zip(col_centers, cells)):
             fill_color = (0,0,0)
-            if i == 3 and txt != "-":
+            if i == 3 and txt != "-":  # rain
                 fill_color = (200, 0, 0)
-            elif i == 4 and txt != "-":
+            elif i == 4 and txt != "-":  # snow
                 fill_color = (0, 0, 200)
 
             if txt == t_text and tmax is not None and tmin is not None:
@@ -326,13 +317,12 @@ def build_image(chat_id):
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
 
-            elif i == 2:
+            elif i == 2:  # wind column → align digits
                 parts = txt.split()
                 if len(parts) == 2:
                     dir_txt, speed_txt = parts
                 else:
                     dir_txt, speed_txt = "?", txt
-
                 w_dir, _ = text_size(dir_txt, font_value)
                 w_speed, _ = text_size(speed_txt, font_value)
                 gap = 4
@@ -341,9 +331,11 @@ def build_image(chat_id):
                 x_dir = x_speed - gap - w_dir
                 draw.text((x_dir, y), dir_txt, font=font_value, fill=fill_color)
                 draw.text((x_speed, y), speed_txt, font=font_value, fill=fill_color)
+
             else:
                 w, _ = text_size(txt, font_value)
                 draw.text((cx - w/2, y), txt, font=font_value, fill=fill_color)
+
         y += int(row_h * 1.1)
 
     draw.text((width - 40, height - 22), "yr.no", font=font_value, fill=(80,80,80))
@@ -353,28 +345,32 @@ def build_image(chat_id):
     bio.seek(0)
     return bio
 
-async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    bio = build_image(chat_id)
-    if bio is None:
-        await update.message.reply_text("Координаты не заданы для этого чата.")
-        return
-    await update.message.reply_photo(photo=bio, caption=f"468 Forecasts — {load_data()['chats'][str(chat_id)]['location_name']}")
-
-# --- Scheduler ---
 def send_forecast():
     d = load_data()
-    for chat_id, chat_data in d.get("chats", {}).items():
+    chats = d.get("chats", {})
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for chat_id, chat_data in chats.items():
         if not chat_data.get("coords") or not chat_data.get("enabled", True):
             continue
-        bio = build_image(chat_id)
+        bio = build_image(chat_data)
         if bio is None:
             continue
-        bot = Bot(token=TELEGRAM_TOKEN)
         try:
-            bot.send_photo(chat_id=int(chat_id), photo=bio, caption=f"468 Forecasts — {chat_data.get('location_name','')}")
+            bot.send_photo(chat_id=chat_id, photo=bio, caption=f"468 Forecasts — {chat_data.get('location_name','')}")
         except Exception as e:
             logger.error(f"Ошибка при отправке прогноза в чат {chat_id}: {e}")
+
+async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    chat_data = get_chat_data(chat_id)
+    if not chat_data.get("coords"):
+        await update.message.reply_text("Координаты не заданы для этого чата.")
+        return
+    bio = build_image(chat_data)
+    if bio is None:
+        await update.message.reply_text("Ошибка при получении прогноза.")
+        return
+    await update.message.reply_photo(photo=bio, caption=f"468 Forecasts — {chat_data.get('location_name','')}")
 
 def schedule_jobs():
     scheduler = BackgroundScheduler(timezone=TIMEZONE)
@@ -383,7 +379,6 @@ def schedule_jobs():
     scheduler.start()
     return scheduler
 
-# --- Main ---
 def main():
     if not TELEGRAM_TOKEN:
         logger.error("TELEGRAM_TOKEN not set. Exiting.")
@@ -393,15 +388,19 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('setcoords', set_coords)],
-        states={
-            LAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_lat)],
-            LON: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_lon)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_location_name)],
-        },
+        states={NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_location_name)]},
         fallbacks=[]
     )
 
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler('setadmin', set_admin_cmd))
     app.add_handler(CommandHandler('forecast', forecast_command))
-    app.add_handle_
+    app.add_handler(CommandHandler('stopforecast', stop_forecast))
+    app.add_handler(CommandHandler('startforecast', start_forecast))
+    app.add_handler(CommandHandler('help', help_command))
+
+    schedule_jobs()
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
