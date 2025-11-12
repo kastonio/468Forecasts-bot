@@ -213,32 +213,49 @@ def build_image():
     d = load_data()
     if not d.get("coords"):
         return None
+
     lat = d["coords"]["lat"]
     lon = d["coords"]["lon"]
     location_name = d.get("location_name") or "unknown"
 
+    # --- Получаем данные с API ---
     try:
-        yr_raw = requests.get(
-            YRNO_URL, params={"lat": lat, "lon": lon},
-            headers={"User-Agent": USER_AGENT}, timeout=15
-        ).json()
-        windy_raw = requests.post(
-            WINDY_URL, json={
-                "lat": lat, "lon": lon, "model": "gfs",
-                "parameters": ["temperature_2m","wind_speed_10m","wind_from_direction_10m","precipitation","new_snow"],
-                "key": WINDY_API_KEY
-            }, timeout=20
-        ).json()
+        yr_resp = requests.get(
+            YRNO_URL,
+            params={"lat": lat, "lon": lon},
+            headers={"User-Agent": USER_AGENT},
+            timeout=15
+        )
+        yr_resp.raise_for_status()
+        yr_raw = yr_resp.json()
         yr = parse_yr(yr_raw)
+
+        windy_resp = requests.post(
+            WINDY_URL,
+            json={
+                "lat": lat, "lon": lon, "model": "gfs",
+                "parameters": ["new_snow"],
+                "key": WINDY_API_KEY
+            },
+            timeout=20
+        )
+        windy_resp.raise_for_status()
+        windy_raw = windy_resp.json()
         windy = parse_windy(windy_raw)
+
+        if not yr or all(v is None for v in yr.values()):
+            raise ValueError("Нет свежих данных YR.no")
+        if not windy:
+            raise ValueError("Нет свежих данных Windy")
     except Exception as e:
-        logger.error(f"Error fetching forecast: {e}")
+        logger.error(f"Ошибка получения данных: {e}")
         return None
 
-    width, height = 1000, 420
-    img = Image.new("RGB", (width, height), "white")
+    width, height = 1100, 450
+    img = Image.new("RGB", (width, height), "#f8f8f8")
     draw = ImageDraw.Draw(img)
 
+    # Шрифты
     try:
         font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
         font = ImageFont.truetype("DejaVuSans.ttf", 14)
@@ -250,42 +267,83 @@ def build_image():
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
-    # headers
-    headers = ["Date", "Temp, C", "Wind, m/s", "Precip, mm", "New snow Windy", "Snow Yr.no"]
-    x_positions = [12, 150, 300, 480, 650, 820]
+    headers = ["Date", "Wind", "Temp", "Precip", "New snow"]
+    x_positions = [12, 120, 250, 400, 550]
     y_start = 50
     y_step = 60
 
     for i, header in enumerate(headers):
         draw.text((x_positions[i], y_start), header, font=font_b, fill=(0,0,0))
 
+    # Цветовая функция температуры
+    def temp_color(temp):
+        if temp is None:
+            return (180,180,180)
+        if temp <= 0: return (0,128,255)
+        if temp <= 10: return (100,200,255)
+        if temp <= 20: return (255,200,100)
+        return (255,50,50)
+
+    # Градиент блока для строки
+    def draw_row_block(y, temp):
+        start_color = (255,255,255)
+        end_color = temp_color(temp)
+        for i in range(50):  # высота блока
+            ratio = i/50
+            r = int(start_color[0]*(1-ratio)+end_color[0]*ratio)
+            g = int(start_color[1]*(1-ratio)+end_color[1]*ratio)
+            b = int(start_color[2]*(1-ratio)+end_color[2]*ratio)
+            draw.line([(0,y+i),(width,y+i)], fill=(r,g,b))
+
+    # Загрузка иконок облаков/осадков
+    icons = {}
+    for name in ["sunny","cloudy","rain","snow","rain_snow"]:
+        try:
+            icons[name] = Image.open(f"icons/{name}.png").convert("RGBA").resize((24,24))
+        except Exception:
+            icons[name] = None
+
     for i, date_str in enumerate(sorted(yr.keys())):
-        y = y_start + y_step * (i + 1)
+        y = y_start + y_step*(i+1)
         yr_data = yr[date_str]
         windy_data = windy.get(date_str, {})
 
+        draw_row_block(y-5, yr_data.get("temp"))
+
         dt = yr_data["time"]
-        date_fmt = dt.strftime("%a %d %B")  # e.g., Mon 12 November
+        date_fmt = dt.strftime("%a %d %b")
         draw.text((x_positions[0], y), date_fmt, font=font, fill=(0,0,0))
 
-        temp_high = yr_data.get("temp", "?")
-        temp_low = temp_high
-        draw.text((x_positions[1], y), f"{temp_high}/{temp_low}", font=font, fill=(0,0,0))
+        wind_dir = deg_to_compass(yr_data.get("wind_dir_deg"))
+        wind_speed = yr_data.get("wind_speed") or 0
+        draw.text((x_positions[1], y), f"{wind_dir} {wind_speed}", font=font, fill=(0,0,0))
 
-        wind_dir = deg_to_compass(windy_data.get("wind_dir_deg") or yr_data.get("wind_dir_deg"))
-        wind_speed = windy_data.get("wind_speed") or yr_data.get("wind_speed") or 0
-        draw.text((x_positions[2], y), f"{wind_dir} {wind_speed}", font=font, fill=(0,0,0))
+        temp = yr_data.get("temp","?")
+        draw.text((x_positions[2], y), f"{temp}", font=font, fill=temp_color(temp))
 
+        # Осадки с иконкой
         precip = yr_data.get("precip_mm") or 0
-        draw.text((x_positions[3], y), f"{precip}", font=font, fill=(0,0,0))
+        icon_x = x_positions[3]
+        if precip == 0:
+            icon = icons.get("sunny")
+        elif temp <= 0:
+            icon = icons.get("snow")
+        elif 0 < temp <= 5 and precip > 0:
+            icon = icons.get("rain_snow")
+        else:
+            icon = icons.get("rain")
+        if icon:
+            img.paste(icon, (icon_x, y-5), icon)
+            draw.text((icon_x+30, y), f"{precip}", font=font, fill=(0,0,255))
+        else:
+            draw.text((icon_x, y), f"{precip}", font=font, fill=(0,0,255))
 
+        # Новый снег
         new_snow = windy_data.get("new_snow_cm") or 0
-        if new_snow < 0:
-            new_snow = 0
-        draw.text((x_positions[4], y), f"{new_snow}", font=font, fill=(0,0,0))
+        draw.text((x_positions[4], y), f"{new_snow}", font=font, fill=(0,0,255))
 
-        snow_yr = max(0, precip * 1.5 if temp_high <= 0 else 0)
-        draw.text((x_positions[5], y), f"{snow_yr}", font=font, fill=(0,0,0))
+        # Рамка блока
+        draw.rectangle([0,y-5,width,y+25], outline="#cccccc", width=1)
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
