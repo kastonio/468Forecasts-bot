@@ -228,14 +228,14 @@ def build_image():
         return None
 
     width, height = 700, 300
-    img = Image.new("RGB", (width, height), "#E0F7FF")
+    img = Image.new("RGB", (width, height), (220, 235, 255))
     draw = ImageDraw.Draw(img)
 
     font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
     font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
     font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
-    draw.text((12, 8), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
+    draw.text((11, 7), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
 
     headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
     col_centers = [80, 240, 400, 540, 650]
