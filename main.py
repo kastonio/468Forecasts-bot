@@ -22,10 +22,8 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WINDY_API_KEY = os.getenv("WINDY_API_KEY")
 USER_AGENT = "468ForecastsBot/1.0 (contact@example.com)"
 YRNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
-WINDY_URL = "https://api.windy.com/api/point-forecast/v2"
 DATA_FILE = "data.json"
 TIMEZONE = pytz.timezone("Europe/Moscow")
 
@@ -128,70 +126,68 @@ def deg_to_compass(deg):
     ix = int((deg + 11.25) / 22.5) % 16
     return dirs[ix]
 
-def parse_yr_detailed(json_data):
-    """Парсит YR.no для подробного прогноза на день: утро, день, вечер"""
+def parse_yr(json_data):
     tz = TIMEZONE
     props = json_data.get("properties", {})
     timeseries = props.get("timeseries", [])
+    results = {}
     now = datetime.now(tz)
-    today = now.date()
-    day_parts = {
-        "morning": (6, 12),
-        "day": (12, 18),
-        "evening": (18, 24)
-    }
-    results = {part: None for part in day_parts}
+    target_dates = [(now + timedelta(days=i)).date() for i in range(5)]
+    candidates = {d: [] for d in target_dates}
     for item in timeseries:
         t_iso = item.get("time")
         if not t_iso:
             continue
         t = datetime.fromisoformat(t_iso.replace("Z", "+00:00")).astimezone(tz)
-        if t.date() != today:
+        date = t.date()
+        if date in candidates:
+            data = item.get("data", {})
+            instant = data.get("instant", {}).get("details", {})
+            precip = 0.0
+            if data.get("next_1_hours") and data["next_1_hours"].get("details"):
+                precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
+            candidates[date].append({
+                "time": t,
+                "temp": instant.get("air_temperature"),
+                "wind_speed": instant.get("wind_speed"),
+                "wind_dir_deg": instant.get("wind_from_direction"),
+                "precip_mm": precip
+            })
+    for d, lst in candidates.items():
+        if not lst:
             continue
-        hour = t.hour
-        data = item.get("data", {}).get("instant", {}).get("details", {})
-        precip = 0.0
-        if item.get("data", {}).get("next_1_hours", {}).get("details"):
-            precip = item["data"]["next_1_hours"]["details"].get("precipitation_amount", 0.0)
-        for part, (start, end) in day_parts.items():
-            if start <= hour < end and results[part] is None:
-                results[part] = {
-                    "time": t,
-                    "temp": data.get("air_temperature"),
-                    "wind_speed": data.get("wind_speed"),
-                    "wind_dir_deg": data.get("wind_from_direction"),
-                    "precip_mm": precip,
-                    "symbol": item.get("data", {}).get("next_1_hours", {}).get("summary", {}).get("symbol_code", "")
-                }
+        target_dt = datetime.combine(d, datetime.min.time()).replace(tzinfo=tz) + timedelta(hours=12)
+        best = min(lst, key=lambda x: abs(x["time"] - target_dt))
+        results[str(d)] = best
     return results
 
+# --- Build forecast image ---
 def build_image_yr_only():
     d = load_data()
     if not d.get("coords"):
         return None
-    lat, lon = d["coords"]["lat"], d["coords"]["lon"]
+
+    lat = d["coords"]["lat"]
+    lon = d["coords"]["lon"]
     location_name = d.get("location_name") or "unknown"
 
-    # Получаем данные
+    # Получаем данные YR.no
     try:
-        resp = requests.get(
+        yr_resp = requests.get(
             YRNO_URL,
             params={"lat": lat, "lon": lon},
             headers={"User-Agent": USER_AGENT},
             timeout=15
         )
-        resp.raise_for_status()
-        yr_raw = resp.json()
-        detailed_today = parse_yr_detailed(yr_raw)
-        forecast_5d = parse_yr(yr_raw)
-        if not forecast_5d:
+        yr_resp.raise_for_status()
+        yr = parse_yr(yr_resp.json())
+        if not yr:
             raise ValueError("Нет свежих данных YR.no")
     except Exception as e:
-        logger.error(f"Ошибка получения данных: {e}")
+        logger.error(f"Ошибка получения данных YR.no: {e}")
         return None
 
-    # Настройка изображения
-    width, height = 1100, 500
+    width, height = 1100, 450
     img = Image.new("RGB", (width, height), "#f8f8f8")
     draw = ImageDraw.Draw(img)
 
@@ -200,48 +196,56 @@ def build_image_yr_only():
         font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
         font = ImageFont.truetype("DejaVuSans.ttf", 14)
     except Exception:
-        font_b = font = ImageFont.load_default()
+        font_b = ImageFont.load_default()
+        font = ImageFont.load_default()
 
-    draw.text((12, 10), f"Weather forecast — {location_name}", font=font_b, fill=(0,0,0))
+    draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
-    # Подробный прогноз на сегодня
-    draw.text((12, 40), "Today:", font=font_b, fill=(0,0,0))
-    y_start = 70
-    y_step = 25
-    for i, part in enumerate(["morning", "day", "evening"]):
-        data = detailed_today.get(part)
-        if data:
-            wind_dir = deg_to_compass(data.get("wind_dir_deg"))
-            wind_speed = data.get("wind_speed") or 0
-            temp = data.get("temp")
-            precip = data.get("precip_mm") or 0
-            symbol = data.get("symbol") or ""
-            draw.text((12, y_start + i*y_step), f"{part.title()}: Wind {wind_dir} {wind_speed} m/s, Temp {temp}°C, Precip {precip} mm, {symbol}", font=font, fill=(0,0,0))
-        else:
-            draw.text((12, y_start + i*y_step), f"{part.title()}: no data", font=font, fill=(150,150,150))
-
-    # 5-дневный прогноз
-    draw.text((12, y_start + 4*y_step), "5-day forecast:", font=font_b, fill=(0,0,0))
-    x_positions = [12, 200, 320, 440]  # Date, Wind, Temp, Precip
     headers = ["Date", "Wind", "Temp", "Precip"]
-    y_start_5d = y_start + 5*y_step
+    x_positions = [12, 120, 250, 400]
+    y_start = 50
+    y_step = 60
+
     for i, header in enumerate(headers):
-        draw.text((x_positions[i], y_start_5d), header, font=font_b, fill=(0,0,0))
+        draw.text((x_positions[i], y_start), header, font=font_b, fill=(0,0,0))
 
-    for i, date_str in enumerate(sorted(forecast_5d.keys())):
-        y = y_start_5d + (i+1)*y_step
-        data = forecast_5d[date_str]
-        dt = data["time"]
+    def temp_color(temp):
+        if temp is None:
+            return (180,180,180)
+        if temp <= 0: return (0,128,255)
+        if temp <= 10: return (100,200,255)
+        if temp <= 20: return (255,200,100)
+        return (255,50,50)
+
+    for i, date_str in enumerate(sorted(yr.keys())):
+        y = y_start + y_step*(i+1)
+        yr_data = yr[date_str]
+
+        dt = yr_data["time"]
         date_fmt = dt.strftime("%a %d %b")
-        wind_dir = deg_to_compass(data.get("wind_dir_deg"))
-        wind_speed = data.get("wind_speed") or 0
-        temp = data.get("temp") or "?"
-        precip = data.get("precip_mm") or 0
-
         draw.text((x_positions[0], y), date_fmt, font=font, fill=(0,0,0))
+
+        wind_dir = deg_to_compass(yr_data.get("wind_dir_deg"))
+        wind_speed = yr_data.get("wind_speed") or 0
         draw.text((x_positions[1], y), f"{wind_dir} {wind_speed}", font=font, fill=(0,0,0))
-        draw.text((x_positions[2], y), f"{temp}", font=font, fill=(0,0,0))
-        draw.text((x_positions[3], y), f"{precip}", font=font, fill=(0,0,255))
+
+        temp = yr_data.get("temp","?")
+        draw.text((x_positions[2], y), f"{temp}", font=font, fill=temp_color(temp))
+
+        # Осадки текстом
+        precip = yr_data.get("precip_mm") or 0
+        if precip == 0:
+            cond = "sunny"
+        elif temp <= 0:
+            cond = "snow"
+        elif 0 < temp <= 5 and precip > 0:
+            cond = "rain_snow"
+        else:
+            cond = "rain"
+        draw.text((x_positions[3], y), f"{cond} {precip}mm", font=font, fill=(0,0,255))
+
+        # Рамка блока
+        draw.rectangle([0,y-5,width,y+25], outline="#cccccc", width=1)
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
@@ -253,7 +257,7 @@ def send_forecast():
     d = load_data()
     if not d.get("coords") or not d.get("chat_id") or not d.get("enabled", True):
         return
-    bio = build_image()
+    bio = build_image_yr_only()
     if bio is None:
         return
     bot = Bot(token=TELEGRAM_TOKEN)
@@ -267,7 +271,7 @@ async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not d.get("coords"):
         await update.message.reply_text("Координаты не заданы. Админ должен задать через /setcoords.")
         return
-    bio = build_image()
+    bio = build_image_yr_only()
     if bio is None:
         await update.message.reply_text("Ошибка при получении прогноза.")
         return
