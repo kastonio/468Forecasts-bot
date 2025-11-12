@@ -208,6 +208,9 @@ def parse_windy(json_data):
     return results
 
 # --- Build forecast image ---
+import locale
+locale.setlocale(locale.LC_TIME, "ru_RU.UTF-8")  # чтобы месяц и день недели на русском
+
 def build_image():
     d = load_data()
     if not d.get("coords"):
@@ -248,37 +251,51 @@ def build_image():
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
-    y_offset = 50
-    headers = ["Date", "Temp (°C)", "Wind", "Precip (mm)", "New Snow (cm)"]
-    x_positions = [12, 150, 300, 500, 650]
-
     # Заголовки таблицы
+    headers = ["Дата", "Tемп, C", "Ветер, м/с", "Осадки в мм воды", "Снег Windy", "Снег Yr.no"]
+    x_positions = [12, 180, 300, 450, 650, 780]
+    y_start = 40
+    y_step = 50
     for x, h in zip(x_positions, headers):
-        draw.text((x, y_offset), h, font=font_b, fill=(0,0,0))
-    y_offset += 30
+        draw.text((x, y_start), h, font=font_b, fill=(0,0,0))
 
-    # Данные по дням
-    for day in sorted(yr.keys()):
-        yr_info = yr.get(day, {})
-        windy_info = windy.get(day, {})
+    # Заполнение таблицы
+    for i, day in enumerate(sorted(yr.keys())):
+        y = y_start + y_step * (i+1)
 
-        temp = yr_info.get("temp") or windy_info.get("temp") or "?"
-        wind_speed = yr_info.get("wind_speed") or windy_info.get("wind_speed") or "?"
-        wind_dir = deg_to_compass(yr_info.get("wind_dir_deg") or windy_info.get("wind_dir_deg"))
-        precip = yr_info.get("precip_mm") or windy_info.get("precip_mm") or 0.0
-        new_snow = windy_info.get("new_snow_cm") or 0.0
+        # Дата
+        dt = datetime.fromisoformat(day)
+        day_str = dt.strftime("%a %d %B")  # пример: пн 10 ноября
+        day_str = day_str[:2] + " " + dt.strftime("%d %B")
+        draw.text((x_positions[0], y), day_str, font=font, fill=(0,0,0))
 
-        row = [
-            day,
-            f"{temp}",
-            f"{wind_speed} м/с {wind_dir}",
-            f"{precip:.1f}",
-            f"{new_snow:.1f}"
-        ]
+        # Температура
+        temp = yr[day].get("temp")
+        if temp is not None:
+            t_str = f"{temp:.1f}"  # только одно значение, можно переделать если нужны high/low
+        else:
+            t_str = "-"
+        draw.text((x_positions[1], y), t_str, font=font, fill=(0,0,0))
 
-        for x, val in zip(x_positions, row):
-            draw.text((x, y_offset), str(val), font=font, fill=(0,0,0))
-        y_offset += 30
+        # Ветер
+        wind_deg = yr[day].get("wind_dir_deg")
+        wind_speed = yr[day].get("wind_speed")
+        wind_str = f"{deg_to_compass(wind_deg)} {wind_speed:.1f}" if wind_deg is not None and wind_speed is not None else "-"
+        draw.text((x_positions[2], y), wind_str, font=font, fill=(0,0,0))
+
+        # Осадки
+        precip = yr[day].get("precip_mm") or 0.0
+        draw.text((x_positions[3], y), f"{precip:.1f}", font=font, fill=(0,0,0))
+
+        # Снег Windy
+        snow_windy = windy[day].get("new_snow_cm") or 0.0
+        if snow_windy < 0 and temp > 0:
+            snow_windy = 0
+        draw.text((x_positions[4], y), f"{snow_windy:.1f}", font=font, fill=(0,0,0))
+
+        # Снег Yr.no
+        snow_yr = precip * 1.5 if temp <= 0 else 0
+        draw.text((x_positions[5], y), f"{snow_yr:.1f}", font=font, fill=(0,0,0))
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
