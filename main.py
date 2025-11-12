@@ -300,10 +300,24 @@ def build_image():
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
 
-            elif i == 2:  # wind column → align text to right within centered zone
-                w, _ = text_size(txt, font_value)
-                x_right = cx + w/2  # keep visually centered but right-aligned text
-                draw.text((x_right - w, y), txt, font=font_value, fill=fill_color)
+            elif i == 2:  # wind column → align digits by right edge
+                parts = txt.split()
+                if len(parts) == 2:
+                    dir_txt, speed_txt = parts
+                else:
+                    dir_txt, speed_txt = "?", txt
+
+                w_dir, _ = text_size(dir_txt, font_value)
+                w_speed, _ = text_size(speed_txt, font_value)
+                gap = 4  # расстояние между направлением и числом
+
+                # правая граница для всех чисел ветра одинаковая
+                x_speed_right = cx + 35  # можно подстроить, если чуть не по центру
+                x_speed = x_speed_right - w_speed
+                x_dir = x_speed - gap - w_dir
+
+                draw.text((x_dir, y), dir_txt, font=font_value, fill=fill_color)
+                draw.text((x_speed, y), speed_txt, font=font_value, fill=fill_color)
 
             else:
                 w, _ = text_size(txt, font_value)
@@ -311,7 +325,6 @@ def build_image():
 
         y += int(row_h * 1.1)
 
-    # подпись
     draw.text((width - 40, height - 22), "yr.no", font=font_value, fill=(80,80,80))
 
     bio = io.BytesIO()
