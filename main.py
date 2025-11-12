@@ -279,7 +279,13 @@ def build_image():
 
         draw.line((12, y - row_h/2, width - 12, y - row_h/2), fill=(160,160,160), width=1)
 
-        for cx, txt in zip(col_centers, cells):
+        for i, (cx, txt) in enumerate(zip(col_centers, cells)):
+            fill_color = (0,0,0)
+            if i == 3:  # rain column
+                fill_color = (200, 0, 0)
+            elif i == 4:  # snow column
+                fill_color = (0, 0, 200)
+
             if txt == t_text and tmax is not None and tmin is not None:
                 max_txt, min_txt = str(tmax), str(tmin)
                 sep = "/"
@@ -293,9 +299,15 @@ def build_image():
                 draw.text((x0, y), sep, font=font_value, fill=(0,0,0))
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
+
+            elif i == 2:  # wind column → align text to right within centered zone
+                w, _ = text_size(txt, font_value)
+                x_right = cx + w/2  # keep visually centered but right-aligned text
+                draw.text((x_right - w, y), txt, font=font_value, fill=fill_color)
+
             else:
                 w, _ = text_size(txt, font_value)
-                draw.text((cx - w/2, y), txt, font=font_value, fill=(0,0,0))
+                draw.text((cx - w/2, y), txt, font=font_value, fill=fill_color)
 
         y += int(row_h * 1.1)
 
