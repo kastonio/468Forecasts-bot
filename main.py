@@ -151,13 +151,12 @@ def parse_yr_web(json_data):
         wind_speed = instant.get("wind_speed")
         wind_dir_deg = instant.get("wind_from_direction")
 
+        # Берем только next_1_hours, иначе завышается
         precip = 0.0
-        for key in ["next_1_hours","next_6_hours","next_12_hours"]:
-            if key in data and data[key].get("details"):
-                precip += data[key]["details"].get("precipitation_amount",0.0)
+        if "next_1_hours" in data and data["next_1_hours"].get("details"):
+            precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
 
         candidates[date].append({
-            "time": t,
             "temp": temp,
             "wind_speed": wind_speed,
             "wind_dir_deg": wind_dir_deg,
@@ -172,17 +171,16 @@ def parse_yr_web(json_data):
         wind_dirs = [x["wind_dir_deg"] for x in lst if x["wind_dir_deg"] is not None]
         total_precip = sum(x["precip_mm"] for x in lst)
 
-        # доминирующее направление ветра
         wind_dir = None
         if wind_dirs:
             wind_dir = Counter(wind_dirs).most_common(1)[0][0]
 
         results[str(d)] = {
-            "temp_min": round(min(temps),1) if temps else None,
-            "temp_max": round(max(temps),1) if temps else None,
-            "wind_speed": round(sum(wind_speeds)/len(wind_speeds),1) if wind_speeds else None,
+            "temp_min": round(min(temps)) if temps else None,
+            "temp_max": round(max(temps)) if temps else None,
+            "wind_speed": round(sum(wind_speeds)/len(wind_speeds)) if wind_speeds else None,
             "wind_dir_deg": wind_dir,
-            "precip_mm": round(total_precip,1)
+            "precip_mm": round(total_precip)
         }
     return results
 
@@ -210,7 +208,7 @@ def build_image():
     width = 700
     height = 280
     row_height = 35
-    img = Image.new("RGB", (width, height), "#E0F7FF")  # нежно-голубой фон
+    img = Image.new("RGB", (width, height), "#E0F7FF")
     draw = ImageDraw.Draw(img)
     try:
         font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 16)
@@ -246,7 +244,7 @@ def build_image():
         precip = info["precip_mm"]
         row = [date_str, temp, wind, f"{precip}"]
 
-        # линия по центру между строками
+        # линия по центру между рядами
         line_y = prev_y + row_height // 2
         draw.line((left_margin, line_y, width-left_margin, line_y), fill="gray", width=1)
         prev_y = y_offset
