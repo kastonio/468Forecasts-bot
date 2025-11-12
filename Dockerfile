@@ -13,3 +13,10 @@ COPY . .
 
 # Указываем команду для запуска бота
 CMD ["python", "main.py"]
+
+RUN apt-get update && apt-get install -y locales \
+    && locale-gen ru_RU.UTF-8 \
+    && update-locale
+ENV LANG ru_RU.UTF-8
+ENV LANGUAGE ru_RU:ru
+ENV LC_ALL ru_RU.UTF-8
