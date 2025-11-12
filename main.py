@@ -126,13 +126,14 @@ def deg_to_compass(deg):
     ix = int((deg + 11.25) / 22.5) % 16
     return dirs[ix]
 
-def parse_yr(json_data):
+def parse_yr_web(json_data):
     tz = TIMEZONE
     props = json_data.get("properties", {})
     timeseries = props.get("timeseries", [])
     results = {}
     now = datetime.now(tz)
     target_dates = [(now + timedelta(days=i)).date() for i in range(5)]
+    ref_hours = [6, 12, 18]
     candidates = {d: [] for d in target_dates}
 
     for item in timeseries:
@@ -141,7 +142,7 @@ def parse_yr(json_data):
             continue
         t = datetime.fromisoformat(t_iso.replace("Z", "+00:00")).astimezone(tz)
         date = t.date()
-        if date not in candidates:
+        if date not in candidates or t.hour not in ref_hours:
             continue
 
         data = item.get("data", {})
@@ -150,9 +151,8 @@ def parse_yr(json_data):
         wind_speed = instant.get("wind_speed")
         wind_dir_deg = instant.get("wind_from_direction")
 
-        # осадки за ближайшие часы
         precip = 0.0
-        for key in ["next_1_hours", "next_6_hours", "next_12_hours"]:
+        for key in ["next_6_hours", "next_12_hours"]:
             if key in data and data[key].get("details"):
                 precip += data[key]["details"].get("precipitation_amount", 0.0)
 
@@ -164,7 +164,6 @@ def parse_yr(json_data):
             "precip_mm": precip
         })
 
-    # дневные min/max/avg
     for d, lst in candidates.items():
         if not lst:
             continue
@@ -183,8 +182,6 @@ def parse_yr(json_data):
     return results
 
 # --- Build forecast image ---
-from datetime import datetime
-
 def build_image():
     d = load_data()
     if not d.get("coords"):
@@ -198,17 +195,17 @@ def build_image():
             YRNO_URL, params={"lat": lat, "lon": lon},
             headers={"User-Agent": USER_AGENT}, timeout=15
         ).json()
-        yr = parse_yr(yr_raw)
+        yr = parse_yr_web(yr_raw)
     except Exception as e:
         logger.error(f"Ошибка при получении прогноза: {e}")
         return None
 
-    # --- Размеры и отступы ---
     left_margin = 12
     top_margin = 50
-    width = 700  # уменьшили ширину
-    height = 280  # уменьшили высоту
-    img = Image.new("RGB", (width, height), "white")
+    width = 700
+    height = 280
+    row_height = 35
+    img = Image.new("RGB", (width, height), "#E0F7FF")  # нежно-голубой фон
     draw = ImageDraw.Draw(img)
     try:
         font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 16)
@@ -222,44 +219,41 @@ def build_image():
     y_offset = top_margin
     headers = ["Date", "Temp (Max/Min °C)", "Wind (m/s)", "Precip (mm)"]
     x_positions = [left_margin, 160, 340, 500]
+    col_widths = [150, 160, 160, 160]
 
-    for x, h in zip(x_positions, headers):
-        draw.text((x, y_offset), h, font=font_b, fill=(0,0,0))
-    y_offset += 25
+    # Заголовки
+    for i, h in enumerate(headers):
+        x = x_positions[i]
+        draw.text((x + col_widths[i]//2, y_offset), h, font=font_b, fill=(0,0,0), anchor="mm")
+    y_offset += row_height
 
+    # Данные
     for day in sorted(yr.keys()):
         info = yr[day]
-
-        # --- Формат даты ---
         dt = datetime.fromisoformat(day)
-        date_str = dt.strftime("%a %d %b")  # Mon 12 Nov
+        date_str = dt.strftime("%a %d %b")
 
-        # --- Температура Max/Min ---
         temp = f"{info['temp_max']}/{info['temp_min']}" if info['temp_min'] is not None else "?"
-
-        # --- Ветер: направление + скорость ---
         wind_dir = deg_to_compass(info["wind_dir_deg"])
         wind_speed = f"{info['wind_speed']}" if info["wind_speed"] is not None else "?"
         wind = f"{wind_dir} {wind_speed}"
-
         precip = info["precip_mm"]
 
-        row = [
-            date_str,
-            temp,
-            wind,
-            f"{precip}"
-        ]
+        row = [date_str, temp, wind, f"{precip}"]
 
-        for x, val in zip(x_positions, row):
-            draw.text((x, y_offset), str(val), font=font, fill=(0,0,0))
-        y_offset += 25
+        # горизонтальная линия
+        draw.line((left_margin, y_offset-5, width-left_margin, y_offset-5), fill="gray", width=1)
+
+        # отцентрованные значения
+        for i, val in enumerate(row):
+            x = x_positions[i]
+            draw.text((x + col_widths[i]//2, y_offset), str(val), font=font, fill=(0,0,0), anchor="mm")
+        y_offset += row_height
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
     return bio
-
 
 # --- Send forecast ---
 def send_forecast():
