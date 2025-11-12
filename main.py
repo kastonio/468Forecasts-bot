@@ -12,6 +12,7 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters
 )
 import logging
+from collections import Counter
 
 # --- Logging ---
 logging.basicConfig(
@@ -133,7 +134,6 @@ def parse_yr_web(json_data):
     results = {}
     now = datetime.now(tz)
     target_dates = [(now + timedelta(days=i)).date() for i in range(5)]
-    ref_hours = [6, 12, 18]
     candidates = {d: [] for d in target_dates}
 
     for item in timeseries:
@@ -142,7 +142,7 @@ def parse_yr_web(json_data):
             continue
         t = datetime.fromisoformat(t_iso.replace("Z", "+00:00")).astimezone(tz)
         date = t.date()
-        if date not in candidates or t.hour not in ref_hours:
+        if date not in candidates:
             continue
 
         data = item.get("data", {})
@@ -152,9 +152,9 @@ def parse_yr_web(json_data):
         wind_dir_deg = instant.get("wind_from_direction")
 
         precip = 0.0
-        for key in ["next_6_hours", "next_12_hours"]:
+        for key in ["next_1_hours","next_6_hours","next_12_hours"]:
             if key in data and data[key].get("details"):
-                precip += data[key]["details"].get("precipitation_amount", 0.0)
+                precip += data[key]["details"].get("precipitation_amount",0.0)
 
         candidates[date].append({
             "time": t,
@@ -172,11 +172,16 @@ def parse_yr_web(json_data):
         wind_dirs = [x["wind_dir_deg"] for x in lst if x["wind_dir_deg"] is not None]
         total_precip = sum(x["precip_mm"] for x in lst)
 
+        # доминирующее направление ветра
+        wind_dir = None
+        if wind_dirs:
+            wind_dir = Counter(wind_dirs).most_common(1)[0][0]
+
         results[str(d)] = {
             "temp_min": round(min(temps),1) if temps else None,
             "temp_max": round(max(temps),1) if temps else None,
             "wind_speed": round(sum(wind_speeds)/len(wind_speeds),1) if wind_speeds else None,
-            "wind_dir_deg": wind_dirs[len(wind_dirs)//2] if wind_dirs else None,
+            "wind_dir_deg": wind_dir,
             "precip_mm": round(total_precip,1)
         }
     return results
@@ -220,6 +225,7 @@ def build_image():
     headers = ["Date", "Temp (Max/Min °C)", "Wind (m/s)", "Precip (mm)"]
     x_positions = [left_margin, 160, 340, 500]
     col_widths = [150, 160, 160, 160]
+    prev_y = y_offset
 
     # Заголовки
     for i, h in enumerate(headers):
@@ -227,24 +233,24 @@ def build_image():
         draw.text((x + col_widths[i]//2, y_offset), h, font=font_b, fill=(0,0,0), anchor="mm")
     y_offset += row_height
 
-    # Данные
+    today_date = datetime.now(TIMEZONE).date()
+
     for day in sorted(yr.keys()):
         info = yr[day]
         dt = datetime.fromisoformat(day)
-        date_str = dt.strftime("%a %d %b")
-
+        date_str = "Today" if dt.date() == today_date else dt.strftime("%a %d %b")
         temp = f"{info['temp_max']}/{info['temp_min']}" if info['temp_min'] is not None else "?"
         wind_dir = deg_to_compass(info["wind_dir_deg"])
         wind_speed = f"{info['wind_speed']}" if info["wind_speed"] is not None else "?"
         wind = f"{wind_dir} {wind_speed}"
         precip = info["precip_mm"]
-
         row = [date_str, temp, wind, f"{precip}"]
 
-        # горизонтальная линия
-        draw.line((left_margin, y_offset-5, width-left_margin, y_offset-5), fill="gray", width=1)
+        # линия по центру между строками
+        line_y = prev_y + row_height // 2
+        draw.line((left_margin, line_y, width-left_margin, line_y), fill="gray", width=1)
+        prev_y = y_offset
 
-        # отцентрованные значения
         for i, val in enumerate(row):
             x = x_positions[i]
             draw.text((x + col_widths[i]//2, y_offset), str(val), font=font, fill=(0,0,0), anchor="mm")
