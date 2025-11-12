@@ -22,10 +22,8 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WINDY_API_KEY = os.getenv("WINDY_API_KEY")
 USER_AGENT = "468ForecastsBot/1.0 (contact@example.com)"
 YRNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
-WINDY_URL = "https://api.windy.com/api/point-forecast/v2"
 DATA_FILE = "data.json"
 TIMEZONE = pytz.timezone("Europe/Moscow")
 
@@ -136,75 +134,52 @@ def parse_yr(json_data):
     now = datetime.now(tz)
     target_dates = [(now + timedelta(days=i)).date() for i in range(5)]
     candidates = {d: [] for d in target_dates}
+
     for item in timeseries:
         t_iso = item.get("time")
         if not t_iso:
             continue
         t = datetime.fromisoformat(t_iso.replace("Z", "+00:00")).astimezone(tz)
         date = t.date()
-        if date in candidates:
-            data = item.get("data", {})
-            instant = data.get("instant", {}).get("details", {})
-            precip = 0.0
-            if data.get("next_1_hours") and data["next_1_hours"].get("details"):
-                precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
-            elif data.get("next_6_hours") and data["next_6_hours"].get("details"):
-                precip = data["next_6_hours"]["details"].get("precipitation_amount", 0.0)
-            candidates[date].append({
-                "time": t,
-                "temp": instant.get("air_temperature"),
-                "wind_speed": instant.get("wind_speed"),
-                "wind_dir_deg": instant.get("wind_from_direction"),
-                "precip_mm": precip
-            })
-    for d, lst in candidates.items():
-        if not lst:
+        if date not in candidates:
             continue
-        target_dt = datetime.combine(d, datetime.min.time()).replace(tzinfo=tz) + timedelta(hours=12)
-        best = min(lst, key=lambda x: abs(x["time"] - target_dt))
-        results[str(d)] = best
-    return results
 
-def parse_windy(json_data):
-    tz = TIMEZONE
-    results = {}
-    forecast = json_data.get("forecast") or json_data.get("data") or {}
-    hours = forecast.get("hours") or forecast.get("timeSeries") or forecast.get("hoursData") or []
-    if not hours and isinstance(json_data.get("hours"), list):
-        hours = json_data.get("hours")
-    now = datetime.now(tz)
-    target_dates = [(now + timedelta(days=i)).date() for i in range(5)]
-    candidates = {d: [] for d in target_dates}
-    for entry in hours:
-        t_str = entry.get("time") or entry.get("dt") or entry.get("timestamp")
-        if not t_str:
-            continue
-        try:
-            t = datetime.fromisoformat(t_str.replace("Z", "+00:00")).astimezone(tz)
-        except Exception:
-            continue
-        d = t.date()
-        if d not in candidates:
-            continue
-        temp = entry.get("temperature_2m") or entry.get("temp") or entry.get("t")
-        wind_speed = entry.get("wind_speed_10m") or entry.get("wind_speed") or entry.get("ws")
-        wind_dir = entry.get("wind_from_direction_10m") or entry.get("wind_dir") or entry.get("wd")
-        precip = entry.get("precipitation") or entry.get("precip") or entry.get("p") or 0.0
-        new_snow = entry.get("new_snow") or entry.get("new_snow_1h") or entry.get("snow") or 0.0
-        candidates[d].append({
+        data = item.get("data", {})
+        instant = data.get("instant", {}).get("details", {})
+        temp = instant.get("air_temperature")
+        wind_speed = instant.get("wind_speed")
+        wind_dir_deg = instant.get("wind_from_direction")
+
+        # осадки за ближайшие часы
+        precip = 0.0
+        for key in ["next_1_hours", "next_6_hours", "next_12_hours"]:
+            if key in data and data[key].get("details"):
+                precip += data[key]["details"].get("precipitation_amount", 0.0)
+
+        candidates[date].append({
             "time": t,
             "temp": temp,
             "wind_speed": wind_speed,
-            "wind_dir_deg": wind_dir,
-            "precip_mm": precip,
-            "new_snow_cm": new_snow
+            "wind_dir_deg": wind_dir_deg,
+            "precip_mm": precip
         })
+
+    # дневные min/max/avg
     for d, lst in candidates.items():
         if not lst:
             continue
-        target_dt = datetime.combine(d, datetime.min.time()).replace(tzinfo=tz) + timedelta(hours=12)
-        best = min(lst, key=lambda x: abs(x["time"] - target_dt))
-        results[str(d)] = best
+        temps = [x["temp"] for x in lst if x["temp"] is not None]
+        wind_speeds = [x["wind_speed"] for x in lst if x["wind_speed"] is not None]
+        wind_dirs = [x["wind_dir_deg"] for x in lst if x["wind_dir_deg"] is not None]
+        total_precip = sum(x["precip_mm"] for x in lst)
+
+        results[str(d)] = {
+            "temp_min": round(min(temps),1) if temps else None,
+            "temp_max": round(max(temps),1) if temps else None,
+            "wind_speed": round(sum(wind_speeds)/len(wind_speeds),1) if wind_speeds else None,
+            "wind_dir_deg": wind_dirs[len(wind_dirs)//2] if wind_dirs else None,
+            "precip_mm": round(total_precip,1)
+        }
     return results
 
 # --- Build forecast image ---
@@ -221,15 +196,7 @@ def build_image():
             YRNO_URL, params={"lat": lat, "lon": lon},
             headers={"User-Agent": USER_AGENT}, timeout=15
         ).json()
-        windy_raw = requests.post(
-            WINDY_URL, json={
-                "lat": lat, "lon": lon, "model": "gfs",
-                "parameters": ["temperature_2m","wind_speed_10m","wind_from_direction_10m","precipitation","new_snow"],
-                "key": WINDY_API_KEY
-            }, timeout=20
-        ).json()
         yr = parse_yr(yr_raw)
-        windy = parse_windy(windy_raw)
     except Exception as e:
         logger.error(f"Ошибка при получении прогноза: {e}")
         return None
@@ -240,42 +207,33 @@ def build_image():
     try:
         font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
         font = ImageFont.truetype("DejaVuSans.ttf", 14)
-        font_mono = ImageFont.truetype("DejaVuSans.ttf", 13)
     except Exception:
         font_b = ImageFont.load_default()
         font = ImageFont.load_default()
-        font_mono = ImageFont.load_default()
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
     y_offset = 50
-    headers = ["Date", "Temp (°C)", "Wind", "Precip (mm)", "New Snow (cm)"]
-    x_positions = [12, 150, 300, 500, 650]
+    headers = ["Date", "Temp (min/max °C)", "Wind", "Precip (mm)"]
+    x_positions = [12, 180, 400, 600]
 
-    # Заголовки таблицы
     for x, h in zip(x_positions, headers):
         draw.text((x, y_offset), h, font=font_b, fill=(0,0,0))
     y_offset += 30
 
-    # Данные по дням
     for day in sorted(yr.keys()):
-        yr_info = yr.get(day, {})
-        windy_info = windy.get(day, {})
-
-        temp = yr_info.get("temp") or windy_info.get("temp") or "?"
-        wind_speed = yr_info.get("wind_speed") or windy_info.get("wind_speed") or "?"
-        wind_dir = deg_to_compass(yr_info.get("wind_dir_deg") or windy_info.get("wind_dir_deg"))
-        precip = yr_info.get("precip_mm") or windy_info.get("precip_mm") or 0.0
-        new_snow = windy_info.get("new_snow_cm") or 0.0
+        info = yr[day]
+        temp = f"{info['temp_min']}/{info['temp_max']}" if info['temp_min'] is not None else "?"
+        wind_speed = info["wind_speed"] if info["wind_speed"] is not None else "?"
+        wind_dir = deg_to_compass(info["wind_dir_deg"])
+        precip = info["precip_mm"]
 
         row = [
             day,
-            f"{temp}",
+            temp,
             f"{wind_speed} м/с {wind_dir}",
-            f"{precip:.1f}",
-            f"{new_snow:.1f}"
+            f"{precip}"
         ]
-
         for x, val in zip(x_positions, row):
             draw.text((x, y_offset), str(val), font=font, fill=(0,0,0))
         y_offset += 30
