@@ -51,18 +51,15 @@ def is_admin(user_id):
 
 # --- Bot commands ---
 async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/setadmin <@username|id>  — assign admin. If admin not set, anyone can set."""
     args = context.args
     d = load_data()
     current_admin = d.get("admin_id")
 
-    # If there's an existing admin, only they can change it
     if current_admin and update.effective_user.id != current_admin:
         await update.message.reply_text("Только текущий админ может назначать нового.")
         return
 
     if not args:
-        # If no args — assign the user who invoked as admin
         new_admin_id = update.effective_user.id
         d["admin_id"] = new_admin_id
         d["chat_id"] = update.effective_chat.id
@@ -73,7 +70,6 @@ async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = args[0]
     try:
         if target.startswith("@"):
-            # Try to resolve username via get_chat (works if user is in the chat)
             user_chat = await context.bot.get_chat(target)
             new_admin_id = user_chat.id
         else:
@@ -91,8 +87,7 @@ async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 COORDS, NAME = range(2)
 
 async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может задать координаты.")
         return ConversationHandler.END
     args = context.args
@@ -140,7 +135,7 @@ async def start_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (
-        "/setadmin [@username|id] - назначить админа (если админ уже есть — только он может назначать)\n"
+        "/setadmin [@username|id] - назначить админа\n"
         "/setcoords <lat> <lon> - задать координаты (только админ)\n"
         "/forecast - получить прогноз сейчас (доступно всем)\n"
         "/stopforecast - остановить рассылку (только админ)\n"
@@ -149,7 +144,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(txt)
 
-# --- Forecast parsing (Yr.no) ---
+# --- Forecast parsing ---
 def deg_to_compass(deg):
     if deg is None:
         return "?"
@@ -158,12 +153,6 @@ def deg_to_compass(deg):
     return dirs[ix]
 
 def parse_yr(json_data):
-    """
-    Parse YR LocationForecast compact JSON into daily aggregates.
-    - Temps: min/max across all times of the day (rounded to int)
-    - Precip: sum only of next_1_hours for each timestamp (to avoid double counting)
-    - Wind: average speed, pick median-direction-like (middle of list)
-    """
     tz = TIMEZONE
     props = json_data.get("properties", {})
     timeseries = props.get("timeseries", [])
@@ -189,13 +178,11 @@ def parse_yr(json_data):
         wind_speed = instant.get("wind_speed")
         wind_dir = instant.get("wind_from_direction")
 
-        # IMPORTANT: take only next_1_hours precipitation (if present) to avoid summing larger intervals repeatedly
         precip = 0.0
         if "next_1_hours" in data and data["next_1_hours"].get("details"):
             precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
 
         candidates[date].append({
-            "time": t,
             "temp": temp,
             "wind_speed": wind_speed,
             "wind_dir": wind_dir,
@@ -211,7 +198,6 @@ def parse_yr(json_data):
         wind_dirs = [x["wind_dir"] for x in lst if x["wind_dir"] is not None]
         total_precip = sum(x["precip_mm"] for x in lst)
 
-        # choose a representative wind direction: pick middle element if list exists
         wind_dir_rep = wind_dirs[len(wind_dirs)//2] if wind_dirs else None
         results[str(d)] = {
             "temp_min": round(min(temps)) if temps else None,
@@ -241,140 +227,86 @@ def build_image():
         logger.exception("Ошибка получения данных от Yr:")
         return None
 
-    # scale everything by 1.5
-    scale = 1.5
-    base_w, base_h = 700, 300
-    width, height = int(base_w * scale), int(base_h * scale)
-    img = Image.new("RGB", (width, height), "#E0F7FF")  # нежно-голубой фон
+    width, height = 700, 300
+    img = Image.new("RGB", (width, height), "#E0F7FF")
     draw = ImageDraw.Draw(img)
 
-    # fonts scaled
-    try:
-        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", int(18 * scale))
-        font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", int(14 * scale))
-        font_value = ImageFont.truetype("DejaVuSans.ttf", int(13 * scale))
-    except Exception:
-        # fallback to default (size will not scale, but ok)
-        font_title = ImageFont.load_default()
-        font_header = ImageFont.load_default()
-        font_value = ImageFont.load_default()
+    font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
+    font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
+    font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
-    # Title
-    draw.text((12 * scale, 8 * scale), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
+    draw.text((12, 8), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
 
-    # Columns config
     headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
-    # Column centers
-    col_centers = [
-        12 * scale + 75 * scale,   # Date
-        12 * scale + 75 * scale + 160 * scale,  # Temp
-        12 * scale + 75 * scale + 320 * scale,  # Wind
-        12 * scale + 75 * scale + 480 * scale,  # Rain
-        12 * scale + 75 * scale + 620 * scale   # Snow
-    ]
-    y_start = 44 * scale
-    row_h = int(36 * scale)
+    col_centers = [80, 240, 400, 540, 650]
+    y_start = 44
+    row_h = 36
 
-    # draw headers centered
     for cx, h in zip(col_centers, headers):
-        bbox = draw.textbbox((0,0), h, font=font_header)
-        w = bbox[2] - bbox[0]
+        w = draw.textbbox((0,0), h, font=font_header)[2]
         draw.text((cx - w/2, y_start), h, font=font_header, fill=(0,0,0))
 
     y = y_start + int(1.2 * row_h)
     today = datetime.now(TIMEZONE).date()
 
-    # helper: text width using textbbox
     def text_size(txt, f):
         b = draw.textbbox((0,0), txt, font=f)
         return b[2]-b[0], b[3]-b[1]
 
-    # iterate days in chronological order
     for day_str in sorted(yr.keys()):
         info = yr[day_str]
         dt = datetime.fromisoformat(day_str)
         label = "Today" if dt.date() == today else dt.strftime("%a %d %b")
 
-        # Temps: Max/Min (rounded ints already)
         tmax = info.get("temp_max")
         tmin = info.get("temp_min")
         t_text = f"{tmax}/{tmin}" if (tmax is not None and tmin is not None) else "?"
 
-        # Colors: positive red, negative blue, zero black
         def temp_color(v):
-            if v is None:
-                return (0,0,0)
-            if v > 0:
-                return (200,0,0)
-            if v < 0:
-                return (0,0,200)
-            return (0,0,0)  # exactly 0 -> black
+            if v is None: return (0,0,0)
+            if v > 0: return (200,0,0)
+            if v < 0: return (0,0,200)
+            return (0,0,0)
 
-        # Wind: direction then speed
         wind_dir = deg_to_compass(info.get("wind_dir_deg"))
         wind_speed = info.get("wind_speed")
         wind_txt = f"{wind_dir} {wind_speed if wind_speed is not None else '?'}"
 
         rain = info.get("precip_mm", 0.0)
-        # Snow: if temp_max <= 0 then snow = rain * 1.5 else 0
         snow = round(rain * 1.5, 1) if (tmax is not None and tmax <= 0) else 0.0
 
-        # Prepare cell texts
-        cells = [
-            label,
-            t_text,
-            wind_txt,
-            f"{rain:.1f}",
-            f"{snow:.1f}"
-        ]
+        cells = [label, t_text, wind_txt, f"{rain:.1f}", f"{snow:.1f}"]
 
-        # draw horizontal center line between previous and this row: line at y - row_h/2
-        line_y = y - row_h / 2
-        left_x = 12 * scale
-        right_x = width - 12 * scale
-        draw.line((left_x, line_y, right_x, line_y), fill=(160,160,160), width=1)
+        draw.line((12, y - row_h/2, width - 12, y - row_h/2), fill=(160,160,160), width=1)
 
-        # render each cell centered
         for cx, txt in zip(col_centers, cells):
-            # For temps we must color parts separately (Max red/blue and Min red/blue).
             if txt == t_text and tmax is not None and tmin is not None:
-                # render Max and Min separately with color
-                max_txt = str(tmax)
-                min_txt = str(tmin)
+                max_txt, min_txt = str(tmax), str(tmin)
                 sep = "/"
-                # compute widths
                 w_max, _ = text_size(max_txt, font_value)
                 w_sep, _ = text_size(sep, font_value)
                 w_min, _ = text_size(min_txt, font_value)
                 total_w = w_max + w_sep + w_min
                 x0 = cx - total_w/2
-                # Max
                 draw.text((x0, y), max_txt, font=font_value, fill=temp_color(tmax))
                 x0 += w_max
-                # sep
                 draw.text((x0, y), sep, font=font_value, fill=(0,0,0))
                 x0 += w_sep
-                # Min
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
             else:
-                # normal centered single text
-                w, h = text_size(txt, font_value)
+                w, _ = text_size(txt, font_value)
                 draw.text((cx - w/2, y), txt, font=font_value, fill=(0,0,0))
 
-        y += int(row_h * 1.1)  # next row
+        y += int(row_h * 1.1)
 
-    # Bottom small "yr.no" signature
-    signature = "yr.no"
-    sw, sh = text_size(signature, font_value)
-    draw.text((width - sw - 12*scale, height - sh - 8*scale), signature, font=font_value, fill=(80,80,80))
+    # подпись
+    draw.text((width - 40, height - 22), "yr.no", font=font_value, fill=(80,80,80))
 
-    # Save to bytes
     bio = io.BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
     return bio
 
-# --- Send forecast ---
 def send_forecast():
     d = load_data()
     if not d.get("coords") or not d.get("chat_id") or not d.get("enabled", True):
@@ -388,11 +320,10 @@ def send_forecast():
     except Exception as e:
         logger.error(f"Ошибка при отправке прогноза: {e}")
 
-# /forecast available to all
 async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = load_data()
     if not d.get("coords"):
-        await update.message.reply_text("Координаты не заданы. Админ должен задать через /setcoords.")
+        await update.message.reply_text("Координаты не заданы.")
         return
     bio = build_image()
     if bio is None:
@@ -400,7 +331,6 @@ async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_photo(photo=bio, caption=f"468 Forecasts — {d.get('location_name','')}")
 
-# --- Scheduler ---
 def schedule_jobs():
     scheduler = BackgroundScheduler(timezone=TIMEZONE)
     for hour in [0,6,12,18]:
@@ -408,7 +338,6 @@ def schedule_jobs():
     scheduler.start()
     return scheduler
 
-# --- Main ---
 def main():
     if not TELEGRAM_TOKEN:
         logger.error("TELEGRAM_TOKEN not set. Exiting.")
