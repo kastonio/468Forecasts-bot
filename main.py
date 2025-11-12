@@ -227,7 +227,13 @@ def build_image():
         logger.exception("Ошибка получения данных от Yr:")
         return None
 
-    width, height = 700, 300
+    # --- размеры изображения ---
+    row_h = 36        # высота строки
+    y_start = 44      # отступ сверху под заголовок
+    num_days = 8      # теперь 8 дней
+    height = y_start + int(row_h * 1.1 * num_days) + 30  # +30 для подписи снизу
+    width = 700
+
     img = Image.new("RGB", (width, height), (220, 235, 255))
     draw = ImageDraw.Draw(img)
 
@@ -235,12 +241,10 @@ def build_image():
     font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
     font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
-    draw.text((11, 7), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
+    draw.text((10, 6), f"468 Forecasts: {location_name}", font=font_title, fill=(0,0,0))
 
     headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
     col_centers = [80, 240, 400, 540, 650]
-    y_start = 44
-    row_h = 36
 
     for cx, h in zip(col_centers, headers):
         w = draw.textbbox((0,0), h, font=font_header)[2]
@@ -253,7 +257,10 @@ def build_image():
         b = draw.textbbox((0,0), txt, font=f)
         return b[2]-b[0], b[3]-b[1]
 
-    for day_str in sorted(yr.keys()):
+    # --- ограничиваем 8 дней ---
+    sorted_days = sorted(yr.keys())[:8]
+
+    for day_str in sorted_days:
         info = yr[day_str]
         dt = datetime.fromisoformat(day_str)
         label = "Today" if dt.date() == today else dt.strftime("%a %d %b")
@@ -281,9 +288,9 @@ def build_image():
 
         for i, (cx, txt) in enumerate(zip(col_centers, cells)):
             fill_color = (0,0,0)
-            if i == 3:  # rain column
+            if i == 3:  # rain
                 fill_color = (200, 0, 0)
-            elif i == 4:  # snow column
+            elif i == 4:  # snow
                 fill_color = (0, 0, 200)
 
             if txt == t_text and tmax is not None and tmin is not None:
@@ -300,7 +307,7 @@ def build_image():
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
 
-            elif i == 2:  # wind column → align digits by right edge
+            elif i == 2:  # wind column → цифры по правому краю
                 parts = txt.split()
                 if len(parts) == 2:
                     dir_txt, speed_txt = parts
@@ -309,10 +316,9 @@ def build_image():
 
                 w_dir, _ = text_size(dir_txt, font_value)
                 w_speed, _ = text_size(speed_txt, font_value)
-                gap = 4  # расстояние между направлением и числом
+                gap = 4
 
-                # правая граница для всех чисел ветра одинаковая
-                x_speed_right = cx + 35  # можно подстроить, если чуть не по центру
+                x_speed_right = cx + 35
                 x_speed = x_speed_right - w_speed
                 x_dir = x_speed - gap - w_dir
 
