@@ -183,6 +183,8 @@ def parse_yr(json_data):
     return results
 
 # --- Build forecast image ---
+from datetime import datetime
+
 def build_image():
     d = load_data()
     if not d.get("coords"):
@@ -201,47 +203,63 @@ def build_image():
         logger.error(f"Ошибка при получении прогноза: {e}")
         return None
 
-    width, height = 1000, 420
+    # --- Размеры и отступы ---
+    left_margin = 12
+    top_margin = 50
+    width = 700  # уменьшили ширину
+    height = 280  # уменьшили высоту
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
     try:
-        font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
-        font = ImageFont.truetype("DejaVuSans.ttf", 14)
+        font_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 16)
+        font = ImageFont.truetype("DejaVuSans.ttf", 13)
     except Exception:
         font_b = ImageFont.load_default()
         font = ImageFont.load_default()
 
-    draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
+    draw.text((left_margin, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
-    y_offset = 50
-    headers = ["Date", "Temp (min/max °C)", "Wind", "Precip (mm)"]
-    x_positions = [12, 180, 400, 600]
+    y_offset = top_margin
+    headers = ["Date", "Temp (Max/Min °C)", "Wind (m/s)", "Precip (mm)"]
+    x_positions = [left_margin, 160, 340, 500]
 
     for x, h in zip(x_positions, headers):
         draw.text((x, y_offset), h, font=font_b, fill=(0,0,0))
-    y_offset += 30
+    y_offset += 25
 
     for day in sorted(yr.keys()):
         info = yr[day]
-        temp = f"{info['temp_min']}/{info['temp_max']}" if info['temp_min'] is not None else "?"
-        wind_speed = info["wind_speed"] if info["wind_speed"] is not None else "?"
+
+        # --- Формат даты ---
+        dt = datetime.fromisoformat(day)
+        date_str = dt.strftime("%a %d %b")  # Mon 12 Nov
+
+        # --- Температура Max/Min ---
+        temp = f"{info['temp_max']}/{info['temp_min']}" if info['temp_min'] is not None else "?"
+
+        # --- Ветер: направление + скорость ---
         wind_dir = deg_to_compass(info["wind_dir_deg"])
+        wind_speed = f"{info['wind_speed']}" if info["wind_speed"] is not None else "?"
+        wind = f"{wind_dir} {wind_speed}"
+
         precip = info["precip_mm"]
 
         row = [
-            day,
+            date_str,
             temp,
-            f"{wind_speed} м/с {wind_dir}",
+            wind,
             f"{precip}"
         ]
+
         for x, val in zip(x_positions, row):
             draw.text((x, y_offset), str(val), font=font, fill=(0,0,0))
-        y_offset += 30
+        y_offset += 25
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
     return bio
+
 
 # --- Send forecast ---
 def send_forecast():
