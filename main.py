@@ -96,6 +96,7 @@ async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 COORDS, NAME = range(2)
 
 async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"set_coords called by user {update.effective_user.id} in chat {update.effective_chat.id} with args={context.args}")
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может задать координаты.")
         return ConversationHandler.END
@@ -111,20 +112,23 @@ async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     context.user_data["coords"] = {"lat": lat, "lon": lon}
     await update.message.reply_text("Введите название места (это будет отображаться в карточке прогноза):")
+    logger.info(f"Coordinates set in user_data for chat {update.effective_chat.id}: {context.user_data['coords']}")
     return NAME
 
 async def save_location_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
     coords = context.user_data.get("coords")
-    if not coords:
-        await update.message.reply_text("Координаты не найдены. Начните с /setcoords")
-        return ConversationHandler.END
     chat_id = update.effective_chat.id
+    if not coords:
+        logger.warning(f"No coordinates found in user_data for chat {chat_id}")
+        await update.message.reply_text("Ошибка: координаты не заданы. Повторите /setcoords.")
+        return ConversationHandler.END
     chat_data = {
         "coords": coords,
         "location_name": name,
         "enabled": True
     }
+    logger.info(f"Saving chat data for chat {chat_id}: {chat_data}")
     save_chat_data(chat_id, chat_data)
     await update.message.reply_text(f"Сохранено для этого чата: {coords['lat']}, {coords['lon']} ({name})")
     return ConversationHandler.END
@@ -298,9 +302,9 @@ def build_image(chat_data):
 
         for i, (cx, txt) in enumerate(zip(col_centers, cells)):
             fill_color = (0,0,0)
-            if i == 3 and txt != "-":  # rain
+            if i == 3 and txt != "-":
                 fill_color = (200, 0, 0)
-            elif i == 4 and txt != "-":  # snow
+            elif i == 4 and txt != "-":
                 fill_color = (0, 0, 200)
 
             if txt == t_text and tmax is not None and tmin is not None:
@@ -317,7 +321,7 @@ def build_image(chat_data):
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
 
-            elif i == 2:  # wind column → align digits
+            elif i == 2:
                 parts = txt.split()
                 if len(parts) == 2:
                     dir_txt, speed_txt = parts
@@ -377,6 +381,7 @@ def schedule_jobs():
     for hour in [8, 12, 16, 22]:
         scheduler.add_job(send_forecast, 'cron', hour=hour, minute=0)
     scheduler.start()
+    logger.info("Scheduler started with jobs at 08:00, 12:00, 16:00, 22:00 Moscow time")
     return scheduler
 
 def main():
