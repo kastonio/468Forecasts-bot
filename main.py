@@ -96,7 +96,6 @@ async def set_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 COORDS, NAME = range(2)
 
 async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"set_coords called by user {update.effective_user.id} in chat {update.effective_chat.id} with args={context.args}")
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Только админ может задать координаты.")
         return ConversationHandler.END
@@ -110,25 +109,23 @@ async def set_coords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Координаты должны быть числами. Пример: /setcoords 55.75 37.62")
         return ConversationHandler.END
-    context.user_data["coords"] = {"lat": lat, "lon": lon}
+    # Сохраняем координаты временно в context.chat_data, привязано к чату
+    context.chat_data["coords"] = {"lat": lat, "lon": lon}
     await update.message.reply_text("Введите название места (это будет отображаться в карточке прогноза):")
-    logger.info(f"Coordinates set in user_data for chat {update.effective_chat.id}: {context.user_data['coords']}")
     return NAME
 
 async def save_location_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
-    coords = context.user_data.get("coords")
     chat_id = update.effective_chat.id
+    coords = context.chat_data.get("coords")
     if not coords:
-        logger.warning(f"No coordinates found in user_data for chat {chat_id}")
-        await update.message.reply_text("Ошибка: координаты не заданы. Повторите /setcoords.")
+        await update.message.reply_text("Произошла ошибка, координаты не заданы.")
         return ConversationHandler.END
     chat_data = {
         "coords": coords,
         "location_name": name,
         "enabled": True
     }
-    logger.info(f"Saving chat data for chat {chat_id}: {chat_data}")
     save_chat_data(chat_id, chat_data)
     await update.message.reply_text(f"Сохранено для этого чата: {coords['lat']}, {coords['lon']} ({name})")
     return ConversationHandler.END
@@ -302,9 +299,9 @@ def build_image(chat_data):
 
         for i, (cx, txt) in enumerate(zip(col_centers, cells)):
             fill_color = (0,0,0)
-            if i == 3 and txt != "-":
+            if i == 3 and txt != "-":  # rain
                 fill_color = (200, 0, 0)
-            elif i == 4 and txt != "-":
+            elif i == 4 and txt != "-":  # snow
                 fill_color = (0, 0, 200)
 
             if txt == t_text and tmax is not None and tmin is not None:
@@ -321,7 +318,7 @@ def build_image(chat_data):
                 x0 += w_sep
                 draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
 
-            elif i == 2:
+            elif i == 2:  # wind column → align digits
                 parts = txt.split()
                 if len(parts) == 2:
                     dir_txt, speed_txt = parts
@@ -407,5 +404,5 @@ def main():
     schedule_jobs()
     app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
