@@ -248,6 +248,38 @@ def build_image():
 
     draw.text((12, 10), f"5-day forecast — {location_name}", font=font_b, fill=(0,0,0))
 
+    y_offset = 50
+    headers = ["Date", "Temp (°C)", "Wind", "Precip (mm)", "New Snow (cm)"]
+    x_positions = [12, 150, 300, 500, 650]
+
+    # Заголовки таблицы
+    for x, h in zip(x_positions, headers):
+        draw.text((x, y_offset), h, font=font_b, fill=(0,0,0))
+    y_offset += 30
+
+    # Данные по дням
+    for day in sorted(yr.keys()):
+        yr_info = yr.get(day, {})
+        windy_info = windy.get(day, {})
+
+        temp = yr_info.get("temp") or windy_info.get("temp") or "?"
+        wind_speed = yr_info.get("wind_speed") or windy_info.get("wind_speed") or "?"
+        wind_dir = deg_to_compass(yr_info.get("wind_dir_deg") or windy_info.get("wind_dir_deg"))
+        precip = yr_info.get("precip_mm") or windy_info.get("precip_mm") or 0.0
+        new_snow = windy_info.get("new_snow_cm") or 0.0
+
+        row = [
+            day,
+            f"{temp}",
+            f"{wind_speed} м/с {wind_dir}",
+            f"{precip:.1f}",
+            f"{new_snow:.1f}"
+        ]
+
+        for x, val in zip(x_positions, row):
+            draw.text((x, y_offset), str(val), font=font, fill=(0,0,0))
+        y_offset += 30
+
     bio = io.BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
