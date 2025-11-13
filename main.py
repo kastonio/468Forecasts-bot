@@ -207,6 +207,24 @@ def parse_yr(json_data):
         }
     return results
 
+def parse_current_conditions(json_data):
+    tz = TIMEZONE
+    timeseries = json_data.get("properties", {}).get("timeseries", [])
+    if not timeseries:
+        return {}
+    first = timeseries[0].get("data", {}).get("instant", {}).get("details", {})
+    temp = first.get("air_temperature")
+    wind_speed = first.get("wind_speed")
+    wind_dir = deg_to_compass(first.get("wind_from_direction"))
+    precip = 0.0
+    if "next_1_hours" in timeseries[0].get("data", {}):
+        precip = timeseries[0]["data"]["next_1_hours"].get("details", {}).get("precipitation_amount", 0.0)
+    return {
+        "temp": temp,
+        "wind": f"{wind_dir} {wind_speed if wind_speed is not None else '?'}",
+        "precip": f"{precip:.1f}" if precip else "-"
+    }
+
 # --- Build image ---
 def build_image():
     d = load_data()
@@ -221,16 +239,16 @@ def build_image():
             YRNO_URL, params={"lat": lat, "lon": lon},
             headers={"User-Agent": USER_AGENT}, timeout=15
         ).json()
-        yr = parse_yr(yr_raw)
+        forecast = parse_yr(yr_raw)
+        current = parse_current_conditions(yr_raw)
     except Exception as e:
         logger.exception("Ошибка получения данных от Yr:")
         return None
 
-    num_days = len(yr)
+    num_days = len(forecast)
     row_h = 36
     height = 140 + int(num_days * row_h * 1.1)
     width = 700
-
     img = Image.new("RGB", (width, height), (220, 235, 255))
     draw = ImageDraw.Draw(img)
 
@@ -238,26 +256,34 @@ def build_image():
     font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
     font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
-    now_str = datetime.now(TIMEZONE).strftime("%d.%m.%Y %H:%M")
-    draw.text((11, 7), f"{now_str} — {location_name}", font=font_title, fill=(0,0,0))
+    # Шапка
+    now_str = datetime.now(TIMEZONE).strftime("%H:%M %d.%m.%Y")
+    draw.text((11, 7), f"468 Forecasts: {now_str}", font=font_title, fill=(0,0,0))
+    draw.text((11, 30), location_name, font=font_title, fill=(0,0,0))
 
+    # Current conditions
+    cc_y = 55
+    draw.text((11, cc_y), "Current conditions:", font=font_header, fill=(0,0,0))
+    cc_txt = f"Temp: {current.get('temp','?')}°C | Wind: {current.get('wind','?')} | Precip: {current.get('precip')}"
+    w_cc, _ = draw.textbbox((0,0), cc_txt, font=font_value)[2:]
+    draw.text((width - w_cc - 12, cc_y), cc_txt, font=font_value, fill=(0,0,0))
+
+    # Таблица
     headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
     col_centers = [80, 240, 400, 540, 650]
-    y_start = 44
-
+    y_start = 80
     for cx, h in zip(col_centers, headers):
         w = draw.textbbox((0,0), h, font=font_header)[2]
         draw.text((cx - w/2, y_start), h, font=font_header, fill=(0,0,0))
 
     y = y_start + int(1.2 * row_h)
     today = datetime.now(TIMEZONE).date()
-
     def text_size(txt, f):
         b = draw.textbbox((0,0), txt, font=f)
         return b[2]-b[0], b[3]-b[1]
 
-    for day_str in sorted(yr.keys()):
-        info = yr[day_str]
+    for day_str in sorted(forecast.keys()):
+        info = forecast[day_str]
         dt = datetime.fromisoformat(day_str)
         label = "Today" if dt.date() == today else dt.strftime("%a %d %b")
 
@@ -320,7 +346,6 @@ def build_image():
             else:
                 w, _ = text_size(txt, font_value)
                 draw.text((cx - w/2, y), txt, font=font_value, fill=fill_color)
-
         y += int(row_h * 1.1)
 
     draw.text((width - 50, height - 25), "yr.no", font=font_value, fill=(80,80,80))
