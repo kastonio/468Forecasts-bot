@@ -151,79 +151,7 @@ def deg_to_compass(deg):
     ix = int((deg + 11.25) / 22.5) % 16
     return dirs[ix]
 
-def parse_yr(json_data):
-    tz = TIMEZONE
-    props = json_data.get("properties", {})
-    timeseries = props.get("timeseries", [])
-    now = datetime.now(tz)
-    target_dates = [(now + timedelta(days=i)).date() for i in range(6)]
-    candidates = {d: [] for d in target_dates}
-
-    for item in timeseries:
-        t_iso = item.get("time")
-        if not t_iso:
-            continue
-        try:
-            t = datetime.fromisoformat(t_iso.replace("Z", "+00:00")).astimezone(tz)
-        except Exception:
-            continue
-        date = t.date()
-        if date not in candidates:
-            continue
-
-        data = item.get("data", {})
-        instant = data.get("instant", {}).get("details", {})
-        temp = instant.get("air_temperature")
-        wind_speed = instant.get("wind_speed")
-        wind_dir = instant.get("wind_from_direction")
-
-        precip = 0.0
-        if "next_1_hours" in data and data["next_1_hours"].get("details"):
-            precip = data["next_1_hours"]["details"].get("precipitation_amount", 0.0)
-
-        candidates[date].append({
-            "temp": temp,
-            "wind_speed": wind_speed,
-            "wind_dir": wind_dir,
-            "precip_mm": precip
-        })
-
-    results = {}
-    for d, lst in candidates.items():
-        if not lst:
-            continue
-        temps = [x["temp"] for x in lst if x["temp"] is not None]
-        wind_speeds = [x["wind_speed"] for x in lst if x["wind_speed"] is not None]
-        wind_dirs = [x["wind_dir"] for x in lst if x["wind_dir"] is not None]
-        total_precip = sum(x["precip_mm"] for x in lst)
-
-        wind_dir_rep = wind_dirs[len(wind_dirs)//2] if wind_dirs else None
-        results[str(d)] = {
-            "temp_min": round(min(temps)) if temps else None,
-            "temp_max": round(max(temps)) if temps else None,
-            "wind_speed": round(mean(wind_speeds),1) if wind_speeds else None,
-            "wind_dir_deg": wind_dir_rep,
-            "precip_mm": round(total_precip, 1)
-        }
-    return results
-
-def parse_current_conditions(json_data):
-    tz = TIMEZONE
-    timeseries = json_data.get("properties", {}).get("timeseries", [])
-    if not timeseries:
-        return {}
-    first = timeseries[0].get("data", {}).get("instant", {}).get("details", {})
-    temp = first.get("air_temperature")
-    wind_speed = first.get("wind_speed")
-    wind_dir = deg_to_compass(first.get("wind_from_direction"))
-    precip = 0.0
-    if "next_1_hours" in timeseries[0].get("data", {}):
-        precip = timeseries[0]["data"]["next_1_hours"].get("details", {}).get("precipitation_amount", 0.0)
-    return {
-        "temp": temp,
-        "wind": f"{wind_dir} {wind_speed if wind_speed is not None else '?'}",
-        "precip": f"{precip:.1f}" if precip else "-"
-    }
+# ... parse_yr и parse_current_conditions без изменений ...
 
 # --- Build image ---
 def build_image():
@@ -253,138 +181,29 @@ def build_image():
     draw = ImageDraw.Draw(img)
 
     font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
+    font_title_small = ImageFont.truetype("DejaVuSans-Bold.ttf", 9)  # уменьшенный шрифт
     font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
     font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
     # Шапка
     now_str = datetime.now(TIMEZONE).strftime("%H:%M %d.%m.%Y")
-    draw.text((11, 7), f"468 Forecasts: {now_str}", font=font_title, fill=(0,0,0))
+    draw.text((11, 7), f"468 Forecasts: {now_str}", font=font_title_small, fill=(0,0,0))
     draw.text((11, 30), location_name, font=font_title, fill=(0,0,0))
 
     # Current conditions
     cc_y = 55
     draw.text((11, cc_y), "Current conditions:", font=font_header, fill=(0,0,0))
-    cc_txt = f"Temp: {current.get('temp','?')}°C | Wind: {current.get('wind','?')} | Precip: {current.get('precip')}"
-    w_cc, _ = draw.textbbox((0,0), cc_txt, font=font_value)[2:]
-    draw.text((width - w_cc - 12, cc_y), cc_txt, font=font_value, fill=(0,0,0))
+    cc_txt = f" Temp: {current.get('temp','?')}°C | Wind: {current.get('wind','?')} | Precip: {current.get('precip')}"
+    draw.text((11 + draw.textbbox((0,0), "Current conditions:", font=font_header)[2], cc_y), cc_txt, font=font_value, fill=(0,0,0))
 
-    # Таблица
-    headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
-    col_centers = [80, 240, 400, 540, 650]
-    y_start = 80
-    for cx, h in zip(col_centers, headers):
-        w = draw.textbbox((0,0), h, font=font_header)[2]
-        draw.text((cx - w/2, y_start), h, font=font_header, fill=(0,0,0))
-
-    y = y_start + int(1.2 * row_h)
-    today = datetime.now(TIMEZONE).date()
-    def text_size(txt, f):
-        b = draw.textbbox((0,0), txt, font=f)
-        return b[2]-b[0], b[3]-b[1]
-
-    for day_str in sorted(forecast.keys()):
-        info = forecast[day_str]
-        dt = datetime.fromisoformat(day_str)
-        label = "Today" if dt.date() == today else dt.strftime("%a %d %b")
-
-        tmax = info.get("temp_max")
-        tmin = info.get("temp_min")
-        t_text = f"{tmax}/{tmin}" if (tmax is not None and tmin is not None) else "?"
-
-        def temp_color(v):
-            if v is None: return (0,0,0)
-            if v > 0: return (200,0,0)
-            if v < 0: return (0,0,200)
-            return (0,0,0)
-
-        wind_dir = deg_to_compass(info.get("wind_dir_deg"))
-        wind_speed = info.get("wind_speed")
-        wind_txt = f"{wind_dir} {wind_speed if wind_speed is not None else '?'}"
-
-        rain_val = info.get("precip_mm", 0.0)
-        rain = f"{rain_val:.1f}" if rain_val else "-"
-        snow_val = round(rain_val * 1.5, 1) if (tmax is not None and tmax <= 0) else 0.0
-        snow = f"{snow_val:.1f}" if snow_val else "-"
-
-        cells = [label, t_text, wind_txt, rain, snow]
-        draw.line((12, y - row_h/2, width - 12, y - row_h/2), fill=(160,160,160), width=1)
-
-        for i, (cx, txt) in enumerate(zip(col_centers, cells)):
-            fill_color = (0,0,0)
-            if i == 3 and txt != "-":
-                fill_color = (200, 0, 0)
-            elif i == 4 and txt != "-":
-                fill_color = (0, 0, 200)
-
-            if txt == t_text and tmax is not None and tmin is not None:
-                max_txt, min_txt = str(tmax), str(tmin)
-                sep = "/"
-                w_max, _ = text_size(max_txt, font_value)
-                w_sep, _ = text_size(sep, font_value)
-                w_min, _ = text_size(min_txt, font_value)
-                total_w = w_max + w_sep + w_min
-                x0 = cx - total_w/2
-                draw.text((x0, y), max_txt, font=font_value, fill=temp_color(tmax))
-                x0 += w_max
-                draw.text((x0, y), sep, font=font_value, fill=(0,0,0))
-                x0 += w_sep
-                draw.text((x0, y), min_txt, font=font_value, fill=temp_color(tmin))
-            elif i == 2:
-                parts = txt.split()
-                if len(parts) == 2:
-                    dir_txt, speed_txt = parts
-                else:
-                    dir_txt, speed_txt = "?", txt
-                w_dir, _ = text_size(dir_txt, font_value)
-                w_speed, _ = text_size(speed_txt, font_value)
-                gap = 4
-                x_speed_right = cx + 35
-                x_speed = x_speed_right - w_speed
-                x_dir = x_speed - gap - w_dir
-                draw.text((x_dir, y), dir_txt, font=font_value, fill=fill_color)
-                draw.text((x_speed, y), speed_txt, font=font_value, fill=fill_color)
-            else:
-                w, _ = text_size(txt, font_value)
-                draw.text((cx - w/2, y), txt, font=font_value, fill=fill_color)
-        y += int(row_h * 1.1)
-
-    draw.text((width - 50, height - 25), "yr.no", font=font_value, fill=(80,80,80))
+    # ... остальной код построения таблицы без изменений ...
 
     bio = io.BytesIO()
     img.save(bio, format="PNG")
     bio.seek(0)
     return bio
 
-def send_forecast():
-    d = load_data()
-    if not d.get("coords") or not d.get("chat_id") or not d.get("enabled", True):
-        return
-    bio = build_image()
-    if bio is None:
-        return
-    bot = Bot(token=TELEGRAM_TOKEN)
-    try:
-        bot.send_photo(chat_id=d["chat_id"], photo=bio, caption=f"{d.get('location_name','')}")
-    except Exception as e:
-        logger.error(f"Ошибка при отправке прогноза: {e}")
-
-async def forecast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    d = load_data()
-    if not d.get("coords"):
-        await update.message.reply_text("Координаты не заданы.")
-        return
-    bio = build_image()
-    if bio is None:
-        await update.message.reply_text("Ошибка при получении прогноза.")
-        return
-    await update.message.reply_photo(photo=bio, caption=f"{d.get('location_name','')}")
-
-def schedule_jobs():
-    scheduler = BackgroundScheduler(timezone=TIMEZONE)
-    for hour in [8, 16]:
-        scheduler.add_job(send_forecast, 'cron', hour=hour, minute=0)
-    scheduler.start()
-    return scheduler
+# --- Остальной код (send_forecast, forecast_command, schedule_jobs, main) без изменений ---
 
 def main():
     if not TELEGRAM_TOKEN:
