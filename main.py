@@ -253,19 +253,19 @@ def build_image():
     draw = ImageDraw.Draw(img)
 
     font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
-    font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
+    font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 15)
     font_value = ImageFont.truetype("DejaVuSans.ttf", 13)
 
     # Шапка
     now_str = datetime.now(TIMEZONE).strftime("%H:%M %d.%m.%Y")
     draw.text((11, 7), f"468 Forecasts: {now_str}", font=font_title, fill=(0,0,0))
-    draw.text((11, 30), location_name, font=font_title, fill=(0,0,0))
+    draw.text((11, 30), location_name, font=font_header, fill=(0,0,0))
 
     # Current conditions
     cc_y = 55
-    draw.text((11, cc_y), "Current conditions:", font=font_header, fill=(0,0,0))
+    draw.text((11, cc_y), "Current conditions:", font=font_value, fill=(0,0,0))
     cc_txt = f" Temp: {current.get('temp','?')}°C | Wind: {current.get('wind','?')} | Precip: {current.get('precip')}"
-    draw.text((11 + draw.textbbox((0,0), "Current conditions:", font=font_header)[2], cc_y), cc_txt, font=font_value, fill=(0,0,0))
+    draw.text((11 + draw.textbbox((0,0), "Current conditions:", font=font_value)[2], cc_y), cc_txt, font=font_value, fill=(0,0,0))
 
     # Таблица
     headers = ["Date", "Temp (°C)", "Wind (m/s)", "Rain (mm)", "Snow (cm)"]
